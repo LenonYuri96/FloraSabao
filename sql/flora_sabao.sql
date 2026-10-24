@@ -129,48 +129,61 @@ INSERT INTO
 VALUES
     (
         1,
-        'PIT',
-        'Sabonete Artesanal Pitanga',
-        'Pitanga Tropical',
+        'MAR',
+        'Sabonete Artesanal Maracujá',
+        'Maracujá Cítrico Suave',
         100.00,
-        'moderado',
-        40,
+        'suave',
+        150,
         50,
         15.00
     ),
     (
         2,
+        'PIT',
+        'Sabonete Artesanal Pitanga',
+        'Pitanga Tropical',
+        100.00,
+        'moderado',
+        150,
+        50,
+        15.00
+    ),
+    (
+        3,
         'LAV',
         'Sabonete Artesanal Lavanda',
         'Lavanda Francesa',
         100.00,
-        'suave',
-        60,
-        50,
-        16.50
-    ),
-    (
-        3,
-        'ROS',
-        'Sabonete Artesanal Rosas',
-        'Rosas Nobres',
-        100.00,
         'moderado',
-        20,
+        150,
         50,
         16.50
     ),
     (
         4,
-        'MAR',
-        'Sabonete Artesanal Maracujá',
-        'Maracujá Cítrico',
+        'ROS',
+        'Sabonete Artesanal Rosas',
+        'Rosas Nobres',
         100.00,
         'intenso',
-        15,
+        150,
         50,
-        15.00
-    );
+        16.50
+    ) ON DUPLICATE KEY
+UPDATE
+    `codigo` =
+VALUES
+    (`codigo`),
+    `nome` =
+VALUES
+    (`nome`),
+    `aroma` =
+VALUES
+    (`aroma`),
+    `intensidade_aroma` =
+VALUES
+    (`intensidade_aroma`);
 
 -- 2. Insumos (Matérias-Primas e Embalagens)
 INSERT INTO

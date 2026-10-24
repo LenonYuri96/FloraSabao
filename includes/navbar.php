@@ -79,13 +79,20 @@ $current_page = basename($_SERVER['PHP_SELF']);
                         <i class="bi bi-graph-up-arrow me-1"></i> Indicadores PCP
                     </a>
                 </li>
+                <li class="nav-item">
+                    <a class="nav-link <?= $current_page === 'estudo_caso.php' ? 'active fw-semibold' : '' ?>"
+                        href="<?= $url_prefix ?>pages/estudo_caso.php">
+                        <i class="bi bi-mortarboard me-1"></i> Estudo de Caso & Lean
+                    </a>
+                </li>
             </ul>
 
             <!-- Usuário Logado / Autenticação (Alinhado à Direita DENTRO da Navbar) -->
             <div class="d-flex align-items-center gap-2 mt-2 mt-lg-0">
                 <?php if (isset($_SESSION['usuario_nome'])): ?>
                     <span class="badge bg-light text-success fw-semibold py-2 px-3 border shadow-sm">
-                        <i class="bi bi-person-circle me-1"></i> <?= htmlspecialchars($_SESSION['usuario_nome']) ?>
+                        <i class="bi bi-person-circle me-1"></i>
+                        <?= htmlspecialchars($_SESSION['usuario_nome']) ?>
                         <span class="opacity-75">(<?= strtoupper($_SESSION['usuario_perfil'] ?? 'USER') ?>)</span>
                     </span>
                     <a href="<?= $url_prefix ?>logout.php" class="btn btn-sm btn-outline-light" title="Encerrar Sessão">
