@@ -1,16 +1,67 @@
-/* ========================================================
-   Flora Sabão — Design System Cosmético / Industrial
-   ======================================================== */
+/* ============================================================
+   FLORA SABÃO — DESIGN SYSTEM BOTÂNICO & INDUSTRIAL v3.1
+   ============================================================
+   1.  Variáveis & Paleta de Cores
+   2.  Base, Reset & Tipografia Fluida
+   3.  Navbar & Identidade de Marca          ← ATUALIZADO
+   4.  Cards, Superfícies & Elevações
+   5.  Badges & Indicadores de Status
+   6.  Tabelas & Tratamento de Dados
+   7.  Alertas & Notificações
+   8.  Botões & Formulários de Alta Precisão
+   9.  Modais & Diálogos
+   10. Componentes do Simulador (Gargalo, Turno, Timeline)
+   11. Scrollbar & Acessibilidade de Toque
+   12. Utilitários & Classes de Suporte
+   13. Responsividade & Media Queries        ← ATUALIZADO
+   ============================================================ */
 
+/* ---------- 1. VARIÁVEIS & PALETA ---------- */
 :root {
-  --flora-primary: #2d5a3f;
-  --flora-primary-hover: #234731;
-  --flora-secondary: #4f772d;
-  --flora-bg: #f7faf7;
+  --flora-primary: #1e4d35;
+  --flora-primary-hover: #143524;
+  --flora-primary-light: #2d6a4f;
+  --flora-secondary: #52796f;
+  --flora-accent: #d8f3dc;
+  --flora-accent-subtle: #edf7f0;
+
+  --flora-bg: #f4f7f4;
   --flora-card-bg: #ffffff;
-  --flora-accent: #eaf2eb;
-  --flora-border: #e2ece3;
-  --flora-text-main: #2b3a2f;
+  --flora-border: #dfe8e2;
+  --flora-border-subtle: #edf2ee;
+
+  --flora-text-main: #1f2d24;
+  --flora-text-muted: #5c7164;
+  --flora-text-subtle: #879b8f;
+
+  --flora-success: #198754;
+  --flora-success-bg: #e8f5e9;
+  --flora-warning: #b78103;
+  --flora-warning-bg: #fff8e6;
+  --flora-danger: #c92a2a;
+  --flora-danger-bg: #ffebee;
+  --flora-info: #0c8599;
+  --flora-info-bg: #e3fafc;
+
+  --shadow-sm: 0 1px 3px rgba(30, 77, 53, 0.05), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 14px rgba(30, 77, 53, 0.07), 0 2px 6px rgba(0, 0, 0, 0.03);
+  --shadow-lg:
+    0 12px 28px rgba(30, 77, 53, 0.1), 0 4px 10px rgba(0, 0, 0, 0.04);
+
+  --fs-h1: clamp(1.4rem, 1.15rem + 1.25vw, 2.25rem);
+  --fs-h2: clamp(1.22rem, 1.05rem + 0.9vw, 1.8rem);
+  --fs-h3: clamp(1.1rem, 0.98rem + 0.65vw, 1.45rem);
+  --fs-h4: clamp(1rem, 0.92rem + 0.45vw, 1.28rem);
+  --fs-h5: clamp(0.92rem, 0.88rem + 0.25vw, 1.12rem);
+  --fs-h6: clamp(0.85rem, 0.82rem + 0.18vw, 0.98rem);
+  --fs-body: clamp(0.875rem, 0.84rem + 0.15vw, 1rem);
+  --fs-small: clamp(0.76rem, 0.74rem + 0.12vw, 0.86rem);
+}
+
+/* ---------- 2. BASE, RESET & TIPOGRAFIA ---------- */
+html,
+body {
+  overflow-x: hidden;
 }
 
 body {
@@ -19,81 +70,804 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
+  font-size: var(--fs-body);
+  line-height: 1.55;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Navbar Personalizada */
+h1,
+.h1 {
+  font-size: var(--fs-h1);
+  font-weight: 700;
+  color: var(--flora-text-main);
+  letter-spacing: -0.02em;
+}
+h2,
+.h2 {
+  font-size: var(--fs-h2);
+  font-weight: 700;
+  color: var(--flora-text-main);
+  letter-spacing: -0.015em;
+}
+h3,
+.h3 {
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  color: var(--flora-text-main);
+}
+h4,
+.h4 {
+  font-size: var(--fs-h4);
+  font-weight: 600;
+}
+h5,
+.h5 {
+  font-size: var(--fs-h5);
+  font-weight: 600;
+}
+h6,
+.h6 {
+  font-size: var(--fs-h6);
+  font-weight: 600;
+}
+
+small,
+.small {
+  font-size: var(--fs-small);
+  color: var(--flora-text-muted);
+}
+.text-muted {
+  color: var(--flora-text-muted) !important;
+}
+
+code,
+.font-monospace {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9em;
+  letter-spacing: 0.02em;
+}
+
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overflow-wrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.d-flex > .flex-grow-1,
+.d-flex > .flex-shrink-0 {
+  min-width: 0;
+}
+
+/* ============================================================
+   3. NAVBAR & IDENTIDADE DE MARCA (v3.2 - Anti-quebra)
+   ============================================================ */
 .navbar-flora {
-  background: linear-gradient(90deg, var(--flora-primary) 0%, #1f422d 100%);
-  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(135deg, var(--flora-primary) 0%, #133324 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 18px rgba(19, 51, 36, 0.25);
 }
 
+.navbar-flora.sticky-top {
+  z-index: 1030;
+  box-shadow: 0 4px 20px rgba(19, 51, 36, 0.28);
+}
+
+/* ★ IMPEDE A QUEBRA DE LINHA NO MENU DESKTOP */
+.navbar-flora .navbar-nav {
+  flex-wrap: nowrap !important;
+  align-items: center;
+}
+
+.navbar-flora .navbar-brand {
+  font-size: clamp(1.05rem, 0.95rem + 0.4vw, 1.3rem);
+  letter-spacing: -0.02em;
+  color: #ffffff !important;
+  margin-right: 1rem; /* Dá um respiro entre a marca e o menu */
+}
+
+.navbar-flora .navbar-brand:hover {
+  color: #ffffff !important;
+  opacity: 0.92;
+}
+
+.navbar-flora .navbar-toggler {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  color: #fff;
+  transition: all 0.15s ease;
+}
+
+.navbar-flora .navbar-toggler:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.navbar-flora .navbar-toggler:focus {
+  box-shadow: 0 0 0 0.22rem rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.navbar-flora .navbar-toggler-icon {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255,255,255,0.9)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+/* ★ LINKS DO MENU: Sem quebra de linha + padding enxuto */
 .navbar-flora .nav-link {
-  color: rgba(255, 255, 255, 0.85) !important;
-  font-size: 0.92rem;
-  transition: color 0.15s ease-in-out;
+  color: rgba(255, 255, 255, 0.82) !important;
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 0.5rem 0.65rem !important;
+  border-radius: 6px;
+  margin: 0;
+  transition: all 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap; /* ← A MÁGICA ACONTECE AQUI */
 }
 
 .navbar-flora .nav-link:hover,
 .navbar-flora .nav-link.active {
   color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
-/* Cartões com elevação suave */
+.navbar-flora .nav-link i {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Dropdown menus da navbar */
+.navbar-flora .dropdown-menu {
+  border: 1px solid var(--flora-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 0.4rem;
+  min-width: 240px;
+  margin-top: 0.4rem;
+}
+
+.navbar-flora .dropdown-header {
+  color: var(--flora-text-subtle);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.35rem 0.75rem 0.25rem;
+}
+
+.navbar-flora .dropdown-item {
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.88rem;
+  color: var(--flora-text-main);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.12s ease;
+}
+
+.navbar-flora .dropdown-item:hover {
+  background-color: var(--flora-accent-subtle);
+  color: var(--flora-primary);
+}
+
+.navbar-flora .dropdown-item.active {
+  background-color: var(--flora-primary);
+  color: #ffffff;
+}
+
+.navbar-flora .dropdown-item.active i {
+  color: #ffffff !important;
+}
+
+.navbar-flora .dropdown-item i {
+  min-width: 18px;
+}
+
+.navbar-flora .user-info-mobile {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.navbar-flora .admin-mobile-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* ---------- 4. CARDS & ELEVAÇÕES ---------- */
 .card-custom {
   background: var(--flora-card-bg);
   border: 1px solid var(--flora-border);
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(45, 90, 63, 0.04);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
   transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
 }
 
 .card-custom:hover {
-  box-shadow: 0 6px 20px rgba(45, 90, 63, 0.08);
+  box-shadow: var(--shadow-md);
 }
 
-/* Badges e Status */
+.card-custom > .row,
+.card-custom > .d-flex {
+  min-width: 0;
+}
+
+.card-custom.border-start-4 {
+  border-left-width: 4px !important;
+}
+
+/* ---------- 5. BADGES & STATUS ---------- */
+.badge {
+  font-weight: 600;
+  padding: 0.4em 0.7em;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+}
+
 .badge-status {
   font-size: 0.78rem;
-  padding: 0.45em 0.8em;
+  padding: 0.42em 0.85em;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-/* Tabelas */
-.table-hover tbody tr:hover {
-  background-color: rgba(45, 90, 63, 0.03);
+.bg-primary-subtle {
+  background-color: var(--flora-accent-subtle) !important;
+  color: var(--flora-primary) !important;
+}
+.bg-success-subtle {
+  background-color: var(--flora-success-bg) !important;
+  color: var(--flora-success) !important;
+}
+.bg-warning-subtle {
+  background-color: var(--flora-warning-bg) !important;
+  color: var(--flora-warning) !important;
+}
+.bg-danger-subtle {
+  background-color: var(--flora-danger-bg) !important;
+  color: var(--flora-danger) !important;
+}
+.bg-info-subtle {
+  background-color: var(--flora-info-bg) !important;
+  color: var(--flora-info) !important;
+}
+
+/* ---------- 6. TABELAS & DADOS ---------- */
+.table-responsive {
+  border-radius: 10px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .table thead th {
-  font-size: 0.75rem;
-  letter-spacing: 0.05em;
-  color: #5a7361;
+  background-color: #f7faf8;
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  color: var(--flora-text-muted);
   font-weight: 700;
+  border-bottom: 2px solid var(--flora-border);
+  padding: 0.75rem 0.85rem;
 }
 
-/* Animação suave para alertas */
+.table tbody td {
+  padding: 0.8rem 0.85rem;
+  border-bottom: 1px solid var(--flora-border-subtle);
+  vertical-align: middle;
+}
+
+.table-hover tbody tr:hover {
+  background-color: rgba(45, 106, 79, 0.025);
+}
+
+/* ---------- 7. ALERTAS ---------- */
 .alert {
-  border-radius: 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-sm);
+  padding: 0.9rem 1.1rem;
 }
 
-/* Barra de Rolagem Suave */
+.alert-success {
+  background-color: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+.alert-warning {
+  background-color: #fefce8;
+  border-color: #fef08a;
+  color: #854d0e;
+}
+.alert-danger {
+  background-color: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+.alert-info {
+  background-color: #f0fdfa;
+  border-color: #99f6e4;
+  color: #115e59;
+}
+
+/* ---------- 8. BOTÕES & FORMULÁRIOS ---------- */
+.btn {
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  border-radius: 8px;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  transition: all 0.15s ease-in-out;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-success {
+  background-color: var(--flora-primary);
+  border-color: var(--flora-primary);
+  box-shadow: 0 2px 6px rgba(30, 77, 53, 0.2);
+}
+
+.btn-success:hover,
+.btn-success:focus {
+  background-color: var(--flora-primary-hover);
+  border-color: var(--flora-primary-hover);
+  box-shadow: 0 4px 12px rgba(30, 77, 53, 0.3);
+}
+
+.btn-outline-success {
+  color: var(--flora-primary);
+  border-color: var(--flora-primary);
+}
+
+.btn-outline-success:hover {
+  background-color: var(--flora-primary);
+  border-color: var(--flora-primary);
+  color: #ffffff;
+}
+
+.btn-sm {
+  min-height: 32px;
+  padding: 0.3rem 0.65rem;
+  font-size: var(--fs-small);
+  border-radius: 6px;
+}
+
+.form-control,
+.form-select {
+  border: 1px solid var(--flora-border);
+  border-radius: 8px;
+  font-size: var(--fs-body);
+  min-height: 38px;
+  color: var(--flora-text-main);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--flora-primary-light);
+  box-shadow: 0 0 0 0.22rem rgba(45, 106, 79, 0.16);
+}
+
+.form-control-sm,
+.form-select-sm {
+  font-size: var(--fs-small);
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+/* ---------- 9. MODAIS ---------- */
+.modal-content {
+  border-radius: 16px;
+  border: 1px solid var(--flora-border);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--flora-border-subtle);
+  background-color: #fafdfa;
+}
+
+.modal-footer {
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--flora-border-subtle);
+  background-color: #fafdfa;
+}
+
+/* ---------- 10. COMPONENTES DO JOGO ---------- */
+.turn-bar {
+  height: 24px;
+  border-radius: 7px;
+  overflow: hidden;
+  display: flex;
+  background-color: #edf2ed;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.turn-bar > div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: width 0.3s ease;
+}
+
+.timeline-linha {
+  border-left: 3px solid #d4e2d7;
+  padding-left: 20px;
+  margin-left: 8px;
+}
+
+.timeline-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 8px;
+  flex-shrink: 0;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 2px var(--flora-primary);
+}
+
+.checklist-item {
+  border-left: 4px solid #d4e2d7;
+  background-color: #ffffff;
+  border-radius: 0 8px 8px 0;
+  padding: 0.65rem 0.9rem;
+  margin-bottom: 0.45rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: all 0.18s ease;
+}
+
+.checklist-item:has(input:checked) {
+  border-left-color: var(--flora-success);
+  background-color: #f7fcf8;
+}
+
+.checklist-item:has(input:checked) label {
+  color: var(--flora-text-muted);
+}
+
+.tacho-card-critical {
+  animation: pulse-border 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(201, 42, 42, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(201, 42, 42, 0);
+  }
+}
+
+/* ---------- 11. SCROLLBAR ---------- */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: #f0f4f1;
 }
 ::-webkit-scrollbar-thumb {
-  background: #c3d4c6;
+  background: #b8ccbe;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--flora-primary);
+}
+
+/* ---------- 12. UTILITÁRIOS ---------- */
+.hide-xs {
+  display: block;
+}
+
+.touch-target {
+  min-width: 42px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ============================================================
+   13. MEDIA QUERIES — RESPONSIVIDADE UNIVERSAL (v3.1)
+   ============================================================ */
+
+/* ---------- TABLET (≤ 991.98px) ---------- */
+@media (max-width: 991.98px) {
+  /* ========== NAVBAR MOBILE ========== */
+  .navbar-flora .navbar-collapse {
+    background: linear-gradient(
+      180deg,
+      rgba(0, 0, 0, 0.28) 0%,
+      rgba(0, 0, 0, 0.15) 100%
+    );
+    border-radius: 12px;
+    padding: 1rem;
+    margin-top: 0.85rem;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.15);
+  }
+
+  /* Reduz gap entre nav-items */
+  .navbar-flora .navbar-nav {
+    gap: 0;
+  }
+
+  /* Item com divisória sutil */
+  .navbar-flora .nav-item {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .navbar-flora .nav-item:last-child {
+    border-bottom: 0;
+  }
+
+  /* Links no mobile: icon + texto com padding generoso */
+  .navbar-flora .nav-link {
+    padding: 0.85rem 0.95rem !important;
+    font-size: 0.95rem;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0;
+  }
+
+  .navbar-flora .nav-link i {
+    font-size: 1.15rem;
+    min-width: 24px;
+    text-align: center;
+  }
+
+  /* Dropdown dentro do menu mobile */
+  .navbar-flora .dropdown-menu {
+    background: rgba(0, 0, 0, 0.25);
+    border: 0;
+    box-shadow: none;
+    padding: 0.25rem 0 0.5rem 1rem;
+    margin-top: 0;
+    border-radius: 8px;
+  }
+
+  .navbar-flora .dropdown-item {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.88rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    margin-bottom: 0.15rem;
+  }
+
+  .navbar-flora .dropdown-item:hover,
+  .navbar-flora .dropdown-item.active {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+  }
+
+  .navbar-flora .dropdown-item i {
+    color: var(--flora-accent) !important;
+  }
+
+  .navbar-flora .dropdown-header {
+    color: rgba(255, 255, 255, 0.6);
+    padding: 0.4rem 0.75rem 0.25rem;
+  }
+
+  .navbar-flora .dropdown-divider {
+    border-color: rgba(255, 255, 255, 0.15);
+    margin: 0.35rem 0;
+  }
+
+  /* Ajusta padding do container da navbar no mobile */
+  .navbar-flora .container-fluid {
+    padding-left: 0.85rem !important;
+    padding-right: 0.85rem !important;
+  }
+
+  /* Brand mais compacto */
+  .navbar-flora .navbar-brand > i {
+    font-size: 1.4rem !important;
+  }
+
+  .navbar-flora .navbar-brand > div > span {
+    font-size: 1rem !important;
+  }
+
+  /* ========== FORA DA NAVBAR ========== */
+  .container-fluid.px-4 {
+    padding-left: 1.15rem !important;
+    padding-right: 1.15rem !important;
+  }
+  .card-custom > .row > [class*="col-"] {
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+  }
+  .modal-lg,
+  .modal-xl {
+    max-width: 95%;
+  }
+}
+
+/* ---------- MOBILE GRANDE (≤ 767.98px) ---------- */
+@media (max-width: 767.98px) {
+  .container-fluid.px-4 {
+    padding-left: 0.85rem !important;
+    padding-right: 0.85rem !important;
+  }
+  .container-fluid.pb-4,
+  .container-fluid.pb-5 {
+    padding-bottom: 1.25rem !important;
+  }
+
+  h2.fw-bold {
+    font-size: 1.35rem;
+  }
+  h3.fw-bold {
+    font-size: 1.2rem;
+  }
+  h4.fw-bold {
+    font-size: 1.05rem;
+  }
+  h5.fw-bold {
+    font-size: 0.98rem;
+  }
+
+  .card-custom.p-4 {
+    padding: 1.1rem !important;
+  }
+  .card-custom.p-3 {
+    padding: 0.85rem !important;
+  }
+
+  .btn {
+    min-height: 42px;
+  }
+  .btn-sm {
+    min-height: 36px;
+    padding: 0.4rem 0.75rem;
+  }
+
+  .btn-group-sm {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.2rem;
+  }
+
+  .btn-group-sm .btn {
+    padding: 0.32rem 0.5rem;
+    font-size: 0.74rem;
+    min-width: 34px;
+  }
+
+  .modal-dialog {
+    margin: 0.5rem;
+    max-width: calc(100% - 1rem);
+  }
+  .modal-header,
+  .modal-footer {
+    padding: 0.85rem 1rem;
+  }
+  .modal-footer .btn {
+    flex: 1 1 auto;
+  }
+
+  .table-responsive {
+    border: 1px solid var(--flora-border);
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.02);
+  }
+  .table-responsive table {
+    min-width: 620px;
+    margin-bottom: 0;
+  }
+
+  .turn-bar {
+    height: 20px;
+  }
+  .turn-bar > div {
+    font-size: 0.65rem;
+  }
+
+  .timeline-linha {
+    padding-left: 14px;
+    margin-left: 4px;
+  }
+  .timeline-dot {
+    width: 10px;
+    height: 10px;
+  }
+}
+
+/* ---------- MOBILE PEQUENO (≤ 480px) ---------- */
+@media (max-width: 480px) {
+  .container-fluid.px-4 {
+    padding-left: 0.6rem !important;
+    padding-right: 0.6rem !important;
+  }
+
+  h2.fw-bold {
+    font-size: 1.2rem;
+  }
+  h3.fw-bold {
+    font-size: 1.05rem;
+  }
+
+  .hide-xs {
+    display: none !important;
+  }
+
+  .table-responsive table {
+    min-width: 520px;
+  }
+
+  .modal-body {
+    padding: 0.85rem;
+  }
+
+  .card-custom.p-3.text-center h3 {
+    font-size: clamp(1rem, 0.9rem + 0.6vw, 1.2rem);
+  }
+
+  /* Navbar ainda mais compacta */
+  .navbar-flora .navbar-collapse {
+    padding: 0.85rem;
+  }
+
+  .navbar-flora .nav-link {
+    font-size: 0.92rem;
+    padding: 0.75rem 0.85rem !important;
+  }
+}
+
+/* ---------- PRINT ---------- */
+@media print {
+  .no-print,
+  .btn,
+  .btn-group,
+  .navbar-flora,
+  footer {
+    display: none !important;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .card-custom {
+    box-shadow: none !important;
+    border: 1px solid #c8d3cb !important;
+    page-break-inside: avoid;
+  }
+
+  .container-fluid {
+    padding: 0 !important;
+  }
 }

@@ -2,16 +2,22 @@
 /**
  * Flora Sabão — Funções Auxiliares Globais (PCP Lab & Business Game)
  * =================================================================
- * Biblioteca central do simulador. Reúne:
+ * Biblioteca central do simulador com suporte Multi-Turma / Multi-Game avançado.
+ * Permite que um mesmo instrutor crie, gerencie, pause e alterne entre múltiplos
+ * jogos/turmas em paralelo sem interferência mútua.
+ *
+ * Módulos integrados:
  *   §1  Formatação e UI (moeda, quantidade, badge de status)
  *   §2  Sessão, autenticação e perfis
  *   §3  Flash messages
- *   §4  Contexto multi-tenant de equipe
- *   §5  Contexto de rodada (Business Game)
- *   §6  Gerador dinâmico de demanda (S&OP determinístico)
- *   §7  Controle financeiro (custo de MP, caixa, falência)
- *   §8  Encerramento de rodada (motor completo do jogo)
- *   §9  Utilitários complementares (data, números, debug)
+ *   §4  Contexto multi-tenant de Jogos/Turmas (Multi-Game por Instrutor)
+ *   §5  Contexto multi-tenant de Equipes (com sincronização de turma)
+ *   §6  Gerenciador de Criação, Reset e Ciclo de Vida de Turmas
+ *   §7  Contexto de rodada por Jogo (Business Game)
+ *   §8  Gerador dinâmico de demanda (S&OP determinístico por equipe/rodada)
+ *   §9  Controle financeiro (custo de MP, caixa, falência)
+ *   §10 Encerramento de rodada transacional isolado por Jogo
+ *   §11 Utilitários complementares (data, números, debug)
  *
  * Compatível com PHP 8.0+
  */
@@ -90,6 +96,7 @@ if (!function_exists('usuarioAtual')) {
             'email'     => $_SESSION['usuario_email']    ?? '',
             'perfil'    => $_SESSION['usuario_perfil']   ?? 'pcp',
             'equipe_id' => $_SESSION['equipe_id'] ?? $_SESSION['usuario_equipe_id'] ?? null,
+            'jogo_id'   => $_SESSION['jogo_id'] ?? null,
         ];
     }
 }
@@ -158,12 +165,227 @@ if (!function_exists('lerFlash')) {
     }
 }
 
-// =========================================================
-// 4. CONTEXTO DE EQUIPE (Multi-Tenant Seguro)
-// =========================================================
+// ==============================================================================
+// 4. CONTEXTO MULTI-TENANT DE JOGOS / TURMAS (MÚLTIPLOS JOGOS POR INSTRUTOR)
+// ==============================================================================
+
+if (!function_exists('getJogoAtivoId')) {
+    /**
+     * Retorna o ID do Jogo/Turma ativa no contexto atual:
+     * - Aluno: herdado de forma imutável da sua equipe.
+     * - Instrutor: selecionável via ?jogo_id=X, salvo em sessão, com fallback
+     *   automático para o jogo ativo mais recente do próprio instrutor.
+     */
+    function getJogoAtivoId(?PDO $pdo = null): int
+    {
+        iniciarSessao();
+
+        // 1. Aluno comum: sempre amarrado à sua equipe
+        if (estaLogado() && !isAdmin()) {
+            if (!empty($_SESSION['jogo_id']) && (int)$_SESSION['jogo_id'] > 0) {
+                return (int)$_SESSION['jogo_id'];
+            }
+            $eq_id = (int)($_SESSION['equipe_id'] ?? $_SESSION['usuario_equipe_id'] ?? 0);
+            if ($eq_id > 0 && $pdo instanceof PDO) {
+                $stmt = $pdo->prepare("SELECT jogo_id FROM equipes WHERE id = ?");
+                $stmt->execute([$eq_id]);
+                $jid = (int)$stmt->fetchColumn();
+                if ($jid > 0) {
+                    $_SESSION['jogo_id'] = $jid;
+                    return $jid;
+                }
+            }
+        }
+
+        // 2. Instrutor alternando turma via GET (?jogo_id=X)
+        if (isAdmin() && isset($_GET['jogo_id']) && (int)$_GET['jogo_id'] > 0) {
+            $novo_jid = (int)$_GET['jogo_id'];
+            if ($pdo instanceof PDO) {
+                selecionarJogoAtivo($pdo, $novo_jid);
+            } else {
+                $_SESSION['jogo_id'] = $novo_jid;
+            }
+            return $novo_jid;
+        }
+
+        // 3. Jogo já ativo na sessão do instrutor
+        if (!empty($_SESSION['jogo_id']) && (int)$_SESSION['jogo_id'] > 0) {
+            return (int)$_SESSION['jogo_id'];
+        }
+
+        // 4. Fallback dinâmico para instrutor: busca a turma ativa mais recente criada por ele
+        if (isAdmin() && $pdo instanceof PDO) {
+            $uid = (int)($_SESSION['usuario_id'] ?? 0);
+            $stmt = $pdo->prepare("
+                SELECT id FROM jogos
+                WHERE instrutor_id = ? AND status = 'ativo'
+                ORDER BY id DESC LIMIT 1
+            ");
+            $stmt->execute([$uid]);
+            $meu_jogo = (int)$stmt->fetchColumn();
+            if ($meu_jogo > 0) {
+                $_SESSION['jogo_id'] = $meu_jogo;
+                return $meu_jogo;
+            }
+        }
+
+        return (int)($_SESSION['jogo_id'] ?? 1);
+    }
+}
+
+if (!function_exists('setJogoAtivoId')) {
+    function setJogoAtivoId(int $jogo_id): void
+    {
+        iniciarSessao();
+        $_SESSION['jogo_id'] = $jogo_id;
+    }
+}
+
+if (!function_exists('selecionarJogoAtivo')) {
+    /**
+     * Alterna com segurança o jogo ativo do instrutor e reajusta a equipe em visualização.
+     */
+    function selecionarJogoAtivo(PDO $pdo, int $jogo_id): bool
+    {
+        iniciarSessao();
+        if (!isAdmin()) {
+            return false;
+        }
+
+        $uid = (int)($_SESSION['usuario_id'] ?? 0);
+        $stmt = $pdo->prepare("SELECT id FROM jogos WHERE id = ? AND (instrutor_id = ? OR ? = 1)");
+        $stmt->execute([$jogo_id, $uid, $uid]);
+        $valido = (int)$stmt->fetchColumn();
+
+        if ($valido > 0) {
+            $_SESSION['jogo_id'] = $jogo_id;
+
+            // Sincroniza a equipe selecionada para a primeira equipe desta nova turma
+            $stmt_eq = $pdo->prepare("SELECT id FROM equipes WHERE jogo_id = ? ORDER BY id ASC LIMIT 1");
+            $stmt_eq->execute([$jogo_id]);
+            $primeira_eq = (int)$stmt_eq->fetchColumn();
+            if ($primeira_eq > 0) {
+                $_SESSION['equipe_id_admin_view'] = $primeira_eq;
+            }
+            return true;
+        }
+        return false;
+    }
+}
+
+if (!function_exists('jogoAtual')) {
+    function jogoAtual(PDO $pdo, ?int $jogo_id = null): ?array
+    {
+        $jid = $jogo_id ?? getJogoAtivoId($pdo);
+        if ($jid <= 0) {
+            return null;
+        }
+        $stmt = $pdo->prepare("SELECT * FROM jogos WHERE id = ?");
+        $stmt->execute([$jid]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+}
+
+if (!function_exists('jogosDoInstrutor')) {
+    /**
+     * Retorna todas as turmas/jogos pertencentes ao instrutor logado com KPIs consolidados.
+     */
+    function jogosDoInstrutor(PDO $pdo, ?int $instrutor_id = null): array
+    {
+        iniciarSessao();
+        $uid = $instrutor_id ?? (int)($_SESSION['usuario_id'] ?? 0);
+        if ($uid <= 0) {
+            return [];
+        }
+        $stmt = $pdo->prepare("
+            SELECT j.*,
+                   (SELECT COUNT(*) FROM equipes WHERE jogo_id = j.id) AS total_equipes,
+                   (SELECT COUNT(*) FROM equipes WHERE jogo_id = j.id AND falida = 1) AS total_falidas,
+                   (SELECT numero_rodada FROM jogo_rodadas WHERE jogo_id = j.id AND status = 'aberta' LIMIT 1) AS rodada_atual,
+                   (SELECT COUNT(*) FROM ordens_producao op JOIN equipes e ON op.equipe_id = e.id WHERE e.jogo_id = j.id AND op.status IN ('planejada','em_producao')) AS ops_em_aberto
+            FROM jogos j
+            WHERE j.instrutor_id = ?
+            ORDER BY FIELD(j.status, 'ativo', 'pausado', 'encerrado'), j.id DESC
+        ");
+        $stmt->execute([$uid]);
+        return $stmt->fetchAll();
+    }
+}
+
+if (!function_exists('urlComJogo')) {
+    function urlComJogo(string $url, ?int $jogo_id = null): string
+    {
+        $jid = $jogo_id ?? getJogoAtivoId();
+        if ($jid <= 0) {
+            return $url;
+        }
+        $sep = str_contains($url, '?') ? '&' : '?';
+        return $url . $sep . 'jogo_id=' . $jid;
+    }
+}
+
+if (!function_exists('resumoJogoAtual')) {
+    /**
+     * Retorna o resumo consolidado dos indicadores da turma em execução.
+     */
+    function resumoJogoAtual(PDO $pdo, ?int $jogo_id = null): array
+    {
+        $jid = $jogo_id ?? getJogoAtivoId($pdo);
+        $jogo = jogoAtual($pdo, $jid);
+
+        if (!$jogo) {
+            return [
+                'jogo'            => null,
+                'total_equipes'   => 0,
+                'total_falidas'   => 0,
+                'rodada_numero'   => 1,
+                'rodada_mes'      => 'Mês 01',
+                'caixa_acumulado' => 0.0,
+                'ops_ativas'      => 0,
+            ];
+        }
+
+        $stmt = $pdo->prepare("
+            SELECT 
+                COUNT(id) AS total_eqs,
+                COALESCE(SUM(CASE WHEN falida = 1 THEN 1 ELSE 0 END), 0) AS total_fal,
+                COALESCE(SUM(caixa_disponivel), 0) AS soma_caixa
+            FROM equipes
+            WHERE jogo_id = ?
+        ");
+        $stmt->execute([$jid]);
+        $eqData = $stmt->fetch() ?: ['total_eqs' => 0, 'total_fal' => 0, 'soma_caixa' => 0.0];
+
+        $rodada = getRodadaAtiva($pdo, $jid);
+
+        $stmt_ops = $pdo->prepare("
+            SELECT COUNT(op.id)
+            FROM ordens_producao op
+            JOIN equipes e ON op.equipe_id = e.id
+            WHERE e.jogo_id = ? AND op.status IN ('planejada', 'em_producao')
+        ");
+        $stmt_ops->execute([$jid]);
+        $opsAtivas = (int)$stmt_ops->fetchColumn();
+
+        return [
+            'jogo'            => $jogo,
+            'total_equipes'   => (int)$eqData['total_eqs'],
+            'total_falidas'   => (int)$eqData['total_fal'],
+            'rodada_numero'   => (int)($rodada['numero_rodada'] ?? 1),
+            'rodada_mes'      => (string)($rodada['mes_ano'] ?? 'Mês 01'),
+            'caixa_acumulado' => (float)$eqData['soma_caixa'],
+            'ops_ativas'      => $opsAtivas,
+        ];
+    }
+}
+
+// ==============================================================================
+// 5. CONTEXTO DE EQUIPE (Multi-Tenant Seguro com Sincronização de Turma)
+// ==============================================================================
 
 if (!function_exists('getEquipeAtivaId')) {
-    function getEquipeAtivaId(): int
+    function getEquipeAtivaId(?PDO $pdo = null): int
     {
         iniciarSessao();
 
@@ -174,29 +396,48 @@ if (!function_exists('getEquipeAtivaId')) {
         $perfil  = $_SESSION['usuario_perfil'] ?? '';
         $minhaEq = (int) ($_SESSION['equipe_id'] ?? $_SESSION['usuario_equipe_id'] ?? 0);
 
-        // Aluno comum sempre cai na própria equipe (mínimo 1)
+        // Aluno comum sempre cai na própria equipe
         if ($perfil !== 'admin') {
             return $minhaEq > 0 ? $minhaEq : 1;
         }
 
-        // Instrutor pode inspecionar qualquer equipe via ?equipe_id=X
+        // Instrutor inspecionando equipe via GET (?equipe_id=X)
         if (isset($_GET['equipe_id']) && (int) $_GET['equipe_id'] > 0) {
             $_SESSION['equipe_id_admin_view'] = (int) $_GET['equipe_id'];
             return (int) $_GET['equipe_id'];
         }
 
-        return (int) ($_SESSION['equipe_id_admin_view'] ?? 1);
+        // Se houver equipe em cache na sessão do instrutor, valida se pertence à turma ativa
+        $eq_cache = (int) ($_SESSION['equipe_id_admin_view'] ?? 0);
+        if ($eq_cache > 0 && $pdo instanceof PDO) {
+            $jid_ativo = getJogoAtivoId($pdo);
+            $stmt = $pdo->prepare("SELECT id FROM equipes WHERE id = ? AND jogo_id = ?");
+            $stmt->execute([$eq_cache, $jid_ativo]);
+            if ($stmt->fetchColumn()) {
+                return $eq_cache;
+            }
+            // Se mudou de turma, busca a primeira equipe da nova turma
+            $stmt_nova = $pdo->prepare("SELECT id FROM equipes WHERE jogo_id = ? ORDER BY id ASC LIMIT 1");
+            $stmt_nova->execute([$jid_ativo]);
+            $primeira = (int)$stmt_nova->fetchColumn();
+            if ($primeira > 0) {
+                $_SESSION['equipe_id_admin_view'] = $primeira;
+                return $primeira;
+            }
+        }
+
+        return $eq_cache > 0 ? $eq_cache : 1;
     }
 }
 
 if (!function_exists('equipeAtual')) {
     function equipeAtual(PDO $pdo): ?array
     {
-        $eq_id = getEquipeAtivaId();
+        $eq_id = getEquipeAtivaId($pdo);
         if ($eq_id <= 0) {
             return null;
         }
-        $stmt = $pdo->prepare("SELECT * FROM equipes WHERE id = ? AND ativo = 1");
+        $stmt = $pdo->prepare("SELECT * FROM equipes WHERE id = ? AND (ativo = 1 OR falida = 1)");
         $stmt->execute([$eq_id]);
         $row = $stmt->fetch();
         return $row ?: null;
@@ -231,42 +472,310 @@ if (!function_exists('urlComEquipe')) {
 }
 
 if (!function_exists('equipesDisponiveis')) {
-    function equipesDisponiveis(PDO $pdo): array
+    function equipesDisponiveis(PDO $pdo, ?int $jogo_id = null): array
     {
         if (!estaLogado()) {
             return [];
         }
 
+        $jid = $jogo_id ?? getJogoAtivoId($pdo);
+
         if (isAdmin()) {
-            return $pdo->query("SELECT id, nome, cor_hex FROM equipes WHERE ativo = 1 ORDER BY id")->fetchAll();
+            $stmt = $pdo->prepare("
+                SELECT id, jogo_id, nome, cor_hex, caixa_disponivel, score_total, falida, codigo_acesso
+                FROM equipes 
+                WHERE (ativo = 1 OR falida = 1) 
+                  AND (jogo_id = ? OR ? = 0)
+                ORDER BY falida ASC, score_total DESC, id ASC
+            ");
+            $stmt->execute([$jid, $jid]);
+            return $stmt->fetchAll();
         }
 
-        $eq = getEquipeAtivaId();
-        $stmt = $pdo->prepare("SELECT id, nome, cor_hex FROM equipes WHERE id = ? AND ativo = 1");
+        $eq = getEquipeAtivaId($pdo);
+        $stmt = $pdo->prepare("SELECT id, jogo_id, nome, cor_hex, caixa_disponivel, score_total, falida, codigo_acesso FROM equipes WHERE id = ?");
         $stmt->execute([$eq]);
         return $stmt->fetchAll();
     }
 }
 
+// ==============================================================================
+// 6. GERENCIADOR DE CRIAÇÃO, RESET E CICLO DE VIDA DE TURMAS / JOGOS
+// ==============================================================================
+
+if (!function_exists('criarNovoJogo')) {
+    /**
+     * Cria uma nova partida/turma completa para um instrutor,
+     * inicializando rodada, equipes com senhas protegidas, catálogo de produtos, insumos e BOMs.
+     */
+    function criarNovoJogo(
+        PDO $pdo,
+        int $instrutor_id,
+        string $nome_turma,
+        string $pin_jogo,
+        int $qtd_equipes = 6,
+        float $caixa_inicial = 15000.00
+    ): int {
+        $pdo->beginTransaction();
+
+        try {
+            $pin_jogo = strtoupper(trim($pin_jogo));
+
+            // 1. Cadastra a partida/turma
+            $stmt = $pdo->prepare("
+                INSERT INTO jogos (instrutor_id, pin_jogo, nome_turma, qtd_equipes, caixa_inicial, status)
+                VALUES (?, ?, ?, ?, ?, 'ativo')
+            ");
+            $stmt->execute([$instrutor_id, $pin_jogo, trim($nome_turma), $qtd_equipes, $caixa_inicial]);
+            $jogo_id = (int)$pdo->lastInsertId();
+
+            // 2. Cria a Rodada 1 inicial aberta para esta turma
+            $stmt_rodada = $pdo->prepare("
+                INSERT INTO jogo_rodadas (jogo_id, numero_rodada, mes_ano, status, evento_titulo, evento_descricao, fator_demanda)
+                VALUES (?, 1, 'Mês 01', 'aberta', 'Rodada de Aquecimento', 'Mercado padrão sem distorções.', 1.00)
+            ");
+            $stmt_rodada->execute([$jogo_id]);
+            $rodada_id = (int)$pdo->lastInsertId();
+
+            // 3. Configurações base das equipes
+            $dados_equipes = [
+                1 => ['nome' => 'Equipe Alfa',    'cor' => '#2d5a3f', 'tag' => 'ALFA'],
+                2 => ['nome' => 'Equipe Beta',    'cor' => '#1e5084', 'tag' => 'BETA'],
+                3 => ['nome' => 'Equipe Gama',    'cor' => '#b85d19', 'tag' => 'GAMA'],
+                4 => ['nome' => 'Equipe Delta',   'cor' => '#6b2d84', 'tag' => 'DELTA'],
+                5 => ['nome' => 'Equipe Épsilon', 'cor' => '#841e3d', 'tag' => 'EPSILON'],
+                6 => ['nome' => 'Equipe Ômega',   'cor' => '#3d454a', 'tag' => 'OMEGA'],
+            ];
+
+            $insumos_padrao = [
+                ['BASE-GLIC', 'Base Glicerinada Vegetal',       'kg', 120.0, 30.0, 24.50],
+                ['EXT-ALOE',  'Extrato Glicólico Aloe Vera',     'L',   5.0,  1.5, 68.00],
+                ['ESS-LAV',   'Essência Lavanda (Suave)',        'L',   1.2,  0.8, 110.00],
+                ['ESS-ROS',   'Essência Rosas (Moderada)',       'L',   0.6,  0.8, 125.00],
+                ['ESS-PIT',   'Essência Pitanga (Moderada)',     'L',   2.0,  0.8, 95.00],
+                ['ESS-MAR',   'Essência Maracujá (Intensa)',     'L',   2.5,  0.8, 92.00],
+                ['LAURIL',    'Lauril Éter Sulfato (Espumante)', 'L',   4.0,  1.0, 18.00],
+                ['EMB-KRAFT', 'Cinta Papel Kraft',               'un', 800.0, 200.0, 0.45],
+                ['CELOF-BIO', 'Película Biodegradável',          'un', 850.0, 200.0, 0.20],
+            ];
+
+            $produtos_padrao = [
+                ['MAR', 'Sabonete Maracujá Cítrico', 'Maracujá', 'suave',    15.00, 'ESS-MAR'],
+                ['PIT', 'Sabonete Pitanga Tropical', 'Pitanga',  'moderado', 15.00, 'ESS-PIT'],
+                ['LAV', 'Sabonete Lavanda Francesa', 'Lavanda',  'moderado', 16.50, 'ESS-LAV'],
+                ['ROS', 'Sabonete Rosas Nobres',     'Rosas',    'intenso',  16.50, 'ESS-ROS'],
+            ];
+
+            // Senha padrão criptografada em BCRYPT (senha: 123456)
+            $senhaPadraoHash = '$2y$10$uDnEpQpkh9RO5tWwOrHtneLAuYMRDstRaKGZFyHubObDR0789OMO6';
+
+            // 4. Cadastra as equipes da partida
+            for ($i = 1; $i <= $qtd_equipes; $i++) {
+                $conf = $dados_equipes[$i] ?? ['nome' => "Equipe $i", 'cor' => '#2d5a3f', 'tag' => "EQ$i"];
+
+                // Código único de acesso do aluno: PIN-TAG-HEX (ex: ENG1-ALFA-4B9F)
+                $codigo_acesso = strtoupper($pin_jogo . '-' . $conf['tag'] . '-' . substr(bin2hex(random_bytes(2)), 0, 4));
+
+                $stmt_eq = $pdo->prepare("
+                    INSERT INTO equipes (jogo_id, nome, codigo_acesso, cor_hex, caixa_disponivel, tacho_ultimo_aroma, tacho_higienizado)
+                    VALUES (?, ?, ?, ?, ?, 'LIMPO', 1)
+                ");
+                $stmt_eq->execute([$jogo_id, $conf['nome'], $codigo_acesso, $conf['cor'], $caixa_inicial]);
+                $equipe_id = (int)$pdo->lastInsertId();
+
+                // Ranking inicial da equipe na rodada 1
+                $pdo->prepare("INSERT INTO ranking_rodadas (rodada_id, equipe_id, score_rodada) VALUES (?, ?, 0)")
+                    ->execute([$rodada_id, $equipe_id]);
+
+                // Usuário vinculado à equipe para acesso
+                $email_equipe = strtolower("{$pin_jogo}_eq{$i}@flora.com");
+                $pdo->prepare("
+                    INSERT INTO usuarios (equipe_id, nome, email, senha, perfil)
+                    VALUES (?, ?, ?, ?, 'pcp')
+                ")->execute([$equipe_id, $conf['nome'], $email_equipe, $senhaPadraoHash]);
+
+                // Cadastra os insumos exclusivos da equipe
+                $insumo_map = [];
+                $stmt_ins = $pdo->prepare("
+                    INSERT INTO insumos (equipe_id, codigo, nome, unidade, estoque_atual, estoque_minimo, custo_unitario)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ");
+                foreach ($insumos_padrao as $ins) {
+                    $stmt_ins->execute([$equipe_id, $ins[0], $ins[1], $ins[2], $ins[3], $ins[4], $ins[5]]);
+                    $insumo_map[$ins[0]] = (int)$pdo->lastInsertId();
+                }
+
+                // Cadastra produtos e suas respectivas Fichas Técnicas (BOM)
+                $stmt_prod = $pdo->prepare("
+                    INSERT INTO produtos (equipe_id, codigo, nome, aroma, intensidade_aroma, estoque_atual, estoque_minimo, preco_venda)
+                    VALUES (?, ?, ?, ?, ?, 150, 50, ?)
+                ");
+                $stmt_bom = $pdo->prepare("
+                    INSERT INTO ficha_tecnica (equipe_id, produto_id, insumo_id, qtd_por_barra)
+                    VALUES (?, ?, ?, ?)
+                ");
+
+                foreach ($produtos_padrao as $prod) {
+                    $stmt_prod->execute([$equipe_id, $prod[0], $prod[1], $prod[2], $prod[3], $prod[4]]);
+                    $prod_id = (int)$pdo->lastInsertId();
+
+                    // Fórmulas fixas
+                    $stmt_bom->execute([$equipe_id, $prod_id, $insumo_map['BASE-GLIC'], 0.0920]);
+                    $stmt_bom->execute([$equipe_id, $prod_id, $insumo_map['EXT-ALOE'],  0.0020]);
+                    $stmt_bom->execute([$equipe_id, $prod_id, $insumo_map['LAURIL'],    0.0020]);
+                    $stmt_bom->execute([$equipe_id, $prod_id, $insumo_map['EMB-KRAFT'], 1.0000]);
+                    $stmt_bom->execute([$equipe_id, $prod_id, $insumo_map['CELOF-BIO'], 1.0000]);
+
+                    // Essência exclusiva de cada SKU
+                    $stmt_bom->execute([$equipe_id, $prod_id, $insumo_map[$prod[5]],    0.0040]);
+                }
+            }
+
+            $pdo->commit();
+
+            // Ativa o novo jogo criado na sessão
+            selecionarJogoAtivo($pdo, $jogo_id);
+
+            return $jogo_id;
+
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[criarNovoJogo] ' . $e->getMessage());
+            throw $e;
+        }
+    }
+}
+
+if (!function_exists('alternarStatusJogo')) {
+    /**
+     * Pausa, reativa ou encerra uma turma/jogo do instrutor.
+     */
+    function alternarStatusJogo(PDO $pdo, int $jogo_id, string $novo_status): bool
+    {
+        if (!in_array($novo_status, ['ativo', 'pausado', 'encerrado'], true)) {
+            return false;
+        }
+        $stmt = $pdo->prepare("UPDATE jogos SET status = ? WHERE id = ?");
+        return $stmt->execute([$novo_status, $jogo_id]);
+    }
+}
+
+if (!function_exists('reiniciarJogoEspecifico')) {
+    /**
+     * Reseta SOMENTE o jogo/turma especificado, preservando intactas todas as outras turmas.
+     */
+    function reiniciarJogoEspecifico(PDO $pdo, int $jogo_id): bool
+    {
+        $pdo->beginTransaction();
+        try {
+            // 1. Busca IDs das equipes daquela turma
+            $stmt = $pdo->prepare("SELECT id FROM equipes WHERE jogo_id = ?");
+            $stmt->execute([$jogo_id]);
+            $equipes_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            if (!empty($equipes_ids)) {
+                $inQuery = implode(',', array_map('intval', $equipes_ids));
+
+                // 2. Limpa movimentações e OPs apenas daquelas equipes
+                $pdo->exec("DELETE FROM mov_estoque WHERE equipe_id IN ({$inQuery})");
+                $pdo->exec("DELETE FROM ranking_rodadas WHERE equipe_id IN ({$inQuery})");
+                $pdo->exec("DELETE FROM ordens_producao WHERE equipe_id IN ({$inQuery})");
+
+                // 3. Reseta estados das equipes
+                $pdo->prepare("
+                    UPDATE equipes 
+                    SET caixa_disponivel = 15000.00, score_total = 0,
+                        tacho_ultimo_aroma = 'LIMPO', tacho_higienizado = 1,
+                        rodadas_no_vermelho = 0, falida = 0, data_falencia = NULL
+                    WHERE jogo_id = ?
+                ")->execute([$jogo_id]);
+
+                // 4. Reseta estoques de PA
+                $pdo->exec("UPDATE produtos SET estoque_atual = 150, estoque_minimo = 50 WHERE equipe_id IN ({$inQuery})");
+
+                // 5. Reseta insumos aos níveis iniciais
+                $insumos_reset = [
+                    'BASE-GLIC' => 120.0, 'EXT-ALOE' => 5.0,  'ESS-LAV' => 1.2,
+                    'ESS-ROS'   => 0.6,   'ESS-PIT'  => 2.0,  'ESS-MAR' => 2.5,
+                    'LAURIL'    => 4.0,   'EMB-KRAFT'=> 800.0,'CELOF-BIO'=> 850.0
+                ];
+                $stmt_up_ins = $pdo->prepare("UPDATE insumos SET estoque_atual = ? WHERE equipe_id = ? AND codigo = ?");
+                foreach ($equipes_ids as $eqId) {
+                    foreach ($insumos_reset as $codIns => $saldoIni) {
+                        $stmt_up_ins->execute([$saldoIni, $eqId, $codIns]);
+                    }
+                }
+            }
+
+            // 6. Limpa rodadas antigas e recria a Rodada 1 do jogo
+            $pdo->prepare("DELETE FROM jogo_rodadas WHERE jogo_id = ?")->execute([$jogo_id]);
+            $pdo->prepare("
+                INSERT INTO jogo_rodadas (jogo_id, numero_rodada, mes_ano, status, evento_titulo, evento_descricao, fator_demanda)
+                VALUES (?, 1, 'Mês 01', 'aberta', 'Rodada de Aquecimento', 'Jogo reiniciado com sucesso!', 1.00)
+            ")->execute([$jogo_id]);
+            $nova_rodada_id = (int)$pdo->lastInsertId();
+
+            // 7. Recria ranking zerado na rodada 1
+            if (!empty($equipes_ids)) {
+                $stmt_rk = $pdo->prepare("INSERT INTO ranking_rodadas (rodada_id, equipe_id, score_rodada) VALUES (?, ?, 0)");
+                foreach ($equipes_ids as $eqId) {
+                    $stmt_rk->execute([$nova_rodada_id, $eqId]);
+                }
+            }
+
+            $pdo->commit();
+            return true;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[reiniciarJogoEspecifico] ' . $e->getMessage());
+            return false;
+        }
+    }
+}
+
 // =========================================================
-// 5. CONTEXTO DE RODADA (Business Game)
+// 7. CONTEXTO DE RODADA (Business Game por Turma)
 // =========================================================
 
 if (!function_exists('getRodadaAtiva')) {
-    function getRodadaAtiva(PDO $pdo): array
+    /**
+     * Retorna a rodada aberta do jogo ativo.
+     * Suporta passagem de $jogo_id explícito ou inferência de sessão.
+     */
+    function getRodadaAtiva(PDO $pdo, ?int $jogo_id = null): array
     {
-        $stmt = $pdo->query("
+        $jid = $jogo_id ?? getJogoAtivoId($pdo);
+
+        // 1. Tenta buscar rodada aberta do jogo específico
+        $stmt = $pdo->prepare("
             SELECT *
             FROM jogo_rodadas
-            WHERE status = 'aberta'
+            WHERE status = 'aberta' AND (jogo_id = ? OR ? = 0)
             ORDER BY numero_rodada DESC, id DESC
             LIMIT 1
         ");
+        $stmt->execute([$jid, $jid]);
         $rodada = $stmt->fetch();
+
+        // 2. Fallback caso a tabela ainda não possua rodadas cadastradas
+        if (!$rodada) {
+            $stmt_geral = $pdo->query("
+                SELECT * FROM jogo_rodadas
+                WHERE status = 'aberta'
+                ORDER BY numero_rodada DESC, id DESC
+                LIMIT 1
+            ");
+            $rodada = $stmt_geral->fetch();
+        }
 
         if (!$rodada) {
             return [
                 'id'               => 1,
+                'jogo_id'          => $jid,
                 'numero_rodada'    => 1,
                 'mes_ano'          => 'Mês 01',
                 'status'           => 'aberta',
@@ -280,9 +789,10 @@ if (!function_exists('getRodadaAtiva')) {
 }
 
 if (!function_exists('temRodadaAberta')) {
-    function temRodadaAberta(PDO $pdo): bool
+    function temRodadaAberta(PDO $pdo, ?int $jogo_id = null): bool
     {
-        return getRodadaAtiva($pdo) !== null;
+        $r = getRodadaAtiva($pdo, $jogo_id);
+        return !empty($r['id']);
     }
 }
 
@@ -299,7 +809,7 @@ if (!function_exists('labelRodada')) {
 }
 
 // ==============================================================================
-// 6. GERADOR DINÂMICO DE DEMANDA & SAZONALIDADE (S&OP INTELIGENTE)
+// 8. GERADOR DINÂMICO DE DEMANDA & SAZONALIDADE (S&OP INTELIGENTE)
 // ==============================================================================
 
 if (!function_exists('gerarNumeroDeterministico')) {
@@ -316,11 +826,21 @@ if (!function_exists('gerarNumeroDeterministico')) {
 
 if (!function_exists('getDemandasRodada')) {
     /**
-     * Retorna as metas de demanda calculadas dinamicamente com base na rodada.
+     * Retorna as metas de demanda calculadas dinamicamente com base na rodada da turma.
      */
-    function getDemandasRodada(PDO $pdo, int $equipe_id): array
+    function getDemandasRodada(PDO $pdo, int $equipe_id, ?int $jogo_id = null): array
     {
-        $rodada       = getRodadaAtiva($pdo);
+        // Descobre o jogo da equipe se não informado
+        if ($jogo_id === null) {
+            $stmt_jq = $pdo->prepare("SELECT jogo_id FROM equipes WHERE id = ?");
+            $stmt_jq->execute([$equipe_id]);
+            $jogo_id = (int)$stmt_jq->fetchColumn();
+            if ($jogo_id <= 0) {
+                $jogo_id = getJogoAtivoId($pdo);
+            }
+        }
+
+        $rodada       = getRodadaAtiva($pdo, $jogo_id);
         $rodada_id    = (int) ($rodada['id'] ?? 1);
         $num_rodada   = (int) ($rodada['numero_rodada'] ?? 1);
         $fator_evento = (float) ($rodada['fator_demanda'] ?? 1.00);
@@ -432,7 +952,7 @@ if (!function_exists('getDemandasRodada')) {
 }
 
 // =============================================================================
-// 7. CONTROLE FINANCEIRO — CUSTO DE PRODUÇÃO, CAIXA E FALÊNCIA
+// 9. CONTROLE FINANCEIRO — CUSTO DE PRODUÇÃO, CAIXA E FALÊNCIA
 // =============================================================================
 
 if (!function_exists('custoBarraProduto')) {
@@ -546,27 +1066,28 @@ if (!function_exists('avaliarSaudeFinanceira')) {
 }
 
 // =============================================================================
-// 8. ENCERRAMENTO DE RODADA (MOTOR DO BUSINESS GAME)
+// 10. ENCERRAMENTO DE RODADA (MOTOR ISOLADO POR JOGO)
 // =============================================================================
 
 if (!function_exists('fecharRodadaAtual')) {
     /**
-     * Flora Sabão — Encerramento de Rodada
+     * Flora Sabão — Encerramento de Rodada (Isolado por Turma/Jogo)
      * =============================================================
-     * Executa em transação única:
-     *   1.  Processa VENDAS (estoque até o limite da meta, parcial ou total)
+     * Executa em transação única e isolada para o $jogo_id especificado:
+     *   1.  Processa VENDAS (estoque até a meta de cada produto da equipe)
      *   2.  Credita receita no caixa + registra Kardex
      *   3.  Apura KPIs operacionais (OTIF, Aderência, Refugo, Yield)
      *   4.  Calcula score (operacional + bônus de lucro, máx +400)
      *   5.  Atualiza ranking_rodadas e score_total
      *   6.  Avalia FALÊNCIA (2 rodadas no vermelho = equipe falida)
-     *   7.  Encerra a rodada atual
-     *   8.  Abre automaticamente a próxima rodada
+     *   7.  Encerra a rodada atual DAQUELE JOGO
+     *   8.  Abre automaticamente a próxima rodada PARA AQUELE JOGO
      *
      * @param  PDO         $pdo
      * @param  string      $evento_nome
      * @param  string      $evento_desc
      * @param  float|null  $fator_demanda_forcado
+     * @param  int|null    $jogo_id
      *
      * @return array{
      *     success: bool,
@@ -574,17 +1095,21 @@ if (!function_exists('fecharRodadaAtual')) {
      *     rodada_encerrada?: int,
      *     nova_rodada?: int,
      *     novo_mes?: string,
-     *     fator_demanda?: float
+     *     fator_demanda?: float,
+     *     jogo_id?: int
      * }
      */
     function fecharRodadaAtual(
         PDO $pdo,
         string $evento_nome = 'Mercado Estável',
         string $evento_desc = 'Condições normais de mercado.',
-        ?float $fator_demanda_forcado = null
+        ?float $fator_demanda_forcado = null,
+        ?int $jogo_id = null
     ): array {
 
-        // 0. Deduz o fator de demanda a partir do nome do evento
+        $jid = $jogo_id ?? getJogoAtivoId($pdo);
+
+        // 0. Deduz o fator de demanda a partir do nome do evento se não forçado
         if ($fator_demanda_forcado === null) {
             $fator_demanda = 1.00;
             $evento_lower  = strtolower($evento_nome);
@@ -605,33 +1130,38 @@ if (!function_exists('fecharRodadaAtual')) {
         try {
             $pdo->beginTransaction();
 
-            // 1. LOCK da rodada aberta (evita duplo fechamento simultâneo)
-            $stmt_r = $pdo->query("
+            // 1. LOCK exclusivo da rodada aberta DO JOGO ESPECÍFICO
+            $stmt_r = $pdo->prepare("
                 SELECT * FROM `jogo_rodadas`
-                WHERE `status` = 'aberta'
+                WHERE `status` = 'aberta' AND (`jogo_id` = ? OR ? = 0)
                 ORDER BY `numero_rodada` DESC, `id` DESC
                 LIMIT 1
                 FOR UPDATE
             ");
+            $stmt_r->execute([$jid, $jid]);
             $rodada_atual = $stmt_r->fetch();
 
             if (!$rodada_atual) {
                 throw new Exception(
-                    'Nenhuma rodada aberta para ser encerrada. ' .
-                    'Verifique se o banco foi inicializado corretamente.'
+                    'Nenhuma rodada aberta encontrada para esta turma. ' .
+                    'Verifique se a turma está inicializada.'
                 );
             }
 
-            $rodada_id = (int) $rodada_atual['id'];
+            $rodada_id    = (int) $rodada_atual['id'];
+            $jogo_real_id = (int) ($rodada_atual['jogo_id'] ?? $jid);
 
-            // 2. Carrega TODAS as equipes (ativas + falidas)
-            $equipes = $pdo->query("
-                SELECT `id`, `falida`
+            // 2. Carrega APENAS as equipes DESTA TURMA/JOGO (ativas + falidas)
+            $stmt_eqs = $pdo->prepare("
+                SELECT `id`, `falida`, `caixa_disponivel`
                 FROM `equipes`
-                WHERE `ativo` = 1 OR `falida` = 1
-            ")->fetchAll();
+                WHERE (`ativo` = 1 OR `falida` = 1)
+                  AND (`jogo_id` = ? OR ? = 0)
+            ");
+            $stmt_eqs->execute([$jogo_real_id, $jogo_real_id]);
+            $equipes = $stmt_eqs->fetchAll();
 
-            // 3. PROCESSAMENTO POR EQUIPE
+            // 3. PROCESSAMENTO POR EQUIPE DESTA TURMA
             foreach ($equipes as $eq) {
                 $eq_id     = (int) $eq['id'];
                 $ja_falida = (int) $eq['falida'] === 1;
@@ -649,7 +1179,7 @@ if (!function_exists('fecharRodadaAtual')) {
                 }
 
                 // 3.1 VENDAS
-                $demandas          = getDemandasRodada($pdo, $eq_id);
+                $demandas          = getDemandasRodada($pdo, $eq_id, $jogo_real_id);
                 $receita           = 0.0;
                 $custo_v           = 0.0;
                 $unidades_vendidas = 0;
@@ -819,23 +1349,23 @@ if (!function_exists('fecharRodadaAtual')) {
                 }
             }
 
-            // 4. ENCERRA rodada atual
+            // 4. ENCERRA rodada atual DA TURMA
             $pdo->prepare("
                 UPDATE `jogo_rodadas`
                 SET `status` = 'encerrada'
                 WHERE `id` = ?
             ")->execute([$rodada_id]);
 
-            // 5. ABRE próxima rodada
+            // 5. ABRE próxima rodada VINCULADA AO JOGO
             $nova_num = (int) $rodada_atual['numero_rodada'] + 1;
             $novo_mes = 'Mês ' . str_pad((string) $nova_num, 2, '0', STR_PAD_LEFT);
 
             $pdo->prepare("
                 INSERT INTO `jogo_rodadas`
-                    (`numero_rodada`, `mes_ano`, `status`,
+                    (`jogo_id`, `numero_rodada`, `mes_ano`, `status`,
                      `evento_titulo`, `evento_descricao`, `fator_demanda`)
-                VALUES (?, ?, 'aberta', ?, ?, ?)
-            ")->execute([$nova_num, $novo_mes, $evento_nome, $evento_desc, $fator_demanda]);
+                VALUES (?, ?, ?, 'aberta', ?, ?, ?)
+            ")->execute([$jogo_real_id, $nova_num, $novo_mes, $evento_nome, $evento_desc, $fator_demanda]);
 
             // 6. COMMIT
             $pdo->commit();
@@ -846,6 +1376,7 @@ if (!function_exists('fecharRodadaAtual')) {
                 'nova_rodada'      => $nova_num,
                 'novo_mes'         => $novo_mes,
                 'fator_demanda'    => $fator_demanda,
+                'jogo_id'          => $jogo_real_id,
                 'message'          => sprintf(
                     'Rodada %d encerrada com sucesso! Nova rodada %d aberta (fator %.2fx).',
                     (int) $rodada_atual['numero_rodada'],
@@ -869,7 +1400,7 @@ if (!function_exists('fecharRodadaAtual')) {
 }
 
 // =============================================================================
-// 9. UTILITÁRIOS COMPLEMENTARES (datas, números, debug)
+// 11. UTILITÁRIOS COMPLEMENTARES (datas, números, debug)
 // =============================================================================
 
 if (!function_exists('mesAnoAtual')) {
