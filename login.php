@@ -8,6 +8,11 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/functions.php';
 
+// ★ AUTO-INICIALIZAÇÃO INVISÍVEL
+// Se for a primeira execução ou se faltar tabela/pasta/dado, inicializa tudo sozinho.
+// Se já estiver tudo criado, a função retorna em 1ms sem fazer nada.
+garantirAmbienteInicializado($pdo);
+
 if (estaLogado()) {
     $perfil = $_SESSION['usuario_perfil'] ?? 'pcp';
     header('Location: ' . ($perfil === 'admin' ? 'pages/instrutor.php' : 'index.php'));
@@ -16,8 +21,8 @@ if (estaLogado()) {
 
 $erro              = '';
 $sucesso           = '';
-$codigos_exibir    = [];    // tabela de códigos a exibir (ver_codigos / reset)
-$novos_codigos     = false; // se veio de reset (para destacar)
+$codigos_exibir    = [];
+$novos_codigos     = false;
 
 // =============================================================================
 // AÇÕES: RESET DE JOGO E VER CÓDIGOS (ambas exigem credenciais do instrutor)

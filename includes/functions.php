@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Flora Sabão — Funções Auxiliares Globais (PCP Lab & Business Game)
  * =================================================================
@@ -637,7 +638,6 @@ if (!function_exists('criarNovoJogo')) {
             selecionarJogoAtivo($pdo, $jogo_id);
 
             return $jogo_id;
-
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -697,9 +697,15 @@ if (!function_exists('reiniciarJogoEspecifico')) {
 
                 // 5. Reseta insumos aos níveis iniciais
                 $insumos_reset = [
-                    'BASE-GLIC' => 120.0, 'EXT-ALOE' => 5.0,  'ESS-LAV' => 1.2,
-                    'ESS-ROS'   => 0.6,   'ESS-PIT'  => 2.0,  'ESS-MAR' => 2.5,
-                    'LAURIL'    => 4.0,   'EMB-KRAFT'=> 800.0,'CELOF-BIO'=> 850.0
+                    'BASE-GLIC' => 120.0,
+                    'EXT-ALOE' => 5.0,
+                    'ESS-LAV' => 1.2,
+                    'ESS-ROS'   => 0.6,
+                    'ESS-PIT'  => 2.0,
+                    'ESS-MAR' => 2.5,
+                    'LAURIL'    => 4.0,
+                    'EMB-KRAFT' => 800.0,
+                    'CELOF-BIO' => 850.0
                 ];
                 $stmt_up_ins = $pdo->prepare("UPDATE insumos SET estoque_atual = ? WHERE equipe_id = ? AND codigo = ?");
                 foreach ($equipes_ids as $eqId) {
@@ -1144,7 +1150,7 @@ if (!function_exists('fecharRodadaAtual')) {
             if (!$rodada_atual) {
                 throw new Exception(
                     'Nenhuma rodada aberta encontrada para esta turma. ' .
-                    'Verifique se a turma está inicializada.'
+                        'Verifique se a turma está inicializada.'
                 );
             }
 
@@ -1255,8 +1261,11 @@ if (!function_exists('fecharRodadaAtual')) {
                 ");
                 $stmt->execute([$eq_id, $rodada_id]);
                 $kpi = $stmt->fetch() ?: [
-                    'total_ops' => 0, 'planejado' => 0, 'produzido' => 0,
-                    'refugo'    => 0, 'ops_otif'  => 0,
+                    'total_ops' => 0,
+                    'planejado' => 0,
+                    'produzido' => 0,
+                    'refugo'    => 0,
+                    'ops_otif'  => 0,
                 ];
 
                 $total_ops  = (int) $kpi['total_ops'];
@@ -1293,9 +1302,9 @@ if (!function_exists('fecharRodadaAtual')) {
                 // 3.3 Score
                 $score_operacional = (int) round(
                     ($otif       * 2.5) +
-                    ($aderencia  * 2.0) +
-                    ($yield      * 2.5) -
-                    $penalidades
+                        ($aderencia  * 2.0) +
+                        ($yield      * 2.5) -
+                        $penalidades
                 );
                 $score_operacional = max(0, $score_operacional);
 
@@ -1315,8 +1324,13 @@ if (!function_exists('fecharRodadaAtual')) {
                         `taxa_refugo`   = VALUES(`taxa_refugo`),
                         `penalidades`   = VALUES(`penalidades`)
                 ")->execute([
-                    $rodada_id, $eq_id, $score, $lucro_rodada,
-                    $otif, $taxa_refugo, $penalidades,
+                    $rodada_id,
+                    $eq_id,
+                    $score,
+                    $lucro_rodada,
+                    $otif,
+                    $taxa_refugo,
+                    $penalidades,
                 ]);
 
                 // 3.5 Recalcula score_total
@@ -1384,7 +1398,6 @@ if (!function_exists('fecharRodadaAtual')) {
                     $fator_demanda
                 ),
             ];
-
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -1466,5 +1479,252 @@ if (!function_exists('debugLog')) {
         }
         $msg = '[DEBUG] ' . $contexto . ' :: ' . json_encode($dados, JSON_UNESCAPED_UNICODE);
         error_log($msg);
+    }
+}
+
+// ==============================================================================
+// 12. AUTO-INICIALIZADOR DO SISTEMA (EXECUTADO PELO LOGIN AUTOMATICAMENTE)
+// ==============================================================================
+
+if (!function_exists('garantirAmbienteInicializado')) {
+    /**
+     * Verifica e cria silenciosamente a infraestrutura do sistema ao acessar o login:
+     * - Pastas obrigatórias
+     * - Tabelas do banco de dados (Multi-Game)
+     * - Usuário Instrutor mestre
+     * - Primeira turma de demonstração (se o banco estiver vazio)
+     * 
+     * Executa em ~1ms se o ambiente já estiver pronto.
+     */
+    function garantirAmbienteInicializado(PDO $pdo): void
+    {
+        // 1. Verificação de Pastas Obrigatórias
+        $raiz = dirname(__DIR__);
+        $pastasObrigatorias = [
+            $raiz . '/api',
+            $raiz . '/assets',
+            $raiz . '/assets/css',
+            $raiz . '/assets/js',
+            $raiz . '/config',
+            $raiz . '/includes',
+            $raiz . '/pages',
+            $raiz . '/sql',
+        ];
+        foreach ($pastasObrigatorias as $dir) {
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0777, true);
+            }
+        }
+
+        // 2. Verificação Rápida de Tabelas Existentes
+        $stmt = $pdo->query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()");
+        $tabelasExistentes = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $tabelasNecessarias = [
+            'jogos',
+            'jogo_rodadas',
+            'equipes',
+            'usuarios',
+            'produtos',
+            'insumos',
+            'ficha_tecnica',
+            'ordens_producao',
+            'mov_estoque',
+            'ranking_rodadas'
+        ];
+
+        $faltando = array_diff($tabelasNecessarias, $tabelasExistentes);
+
+        // Se NÃO falta nenhuma tabela, faz o check super rápido de dados e encerra
+        if (empty($faltando)) {
+            $stmt_adm = $pdo->query("SELECT id FROM usuarios WHERE email = 'admin@flora.com' LIMIT 1");
+            $adm_id = $stmt_adm->fetchColumn();
+
+            $stmt_jg = $pdo->query("SELECT id FROM jogos LIMIT 1");
+            $tem_jg = $stmt_jg->fetchColumn();
+
+            if ($adm_id && $tem_jg) {
+                return; // ⚡ TUDO PRONTO! Retorno instantâneo sem custo de processamento.
+            }
+        }
+
+        // 3. Criação das Tabelas Faltantes (Estrutura Multi-Game)
+        $pdo->exec("SET FOREIGN_KEY_CHECKS = 0;");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `jogos` (
+                `id`             INT AUTO_INCREMENT PRIMARY KEY,
+                `instrutor_id`   INT NOT NULL,
+                `pin_jogo`       VARCHAR(15) NOT NULL UNIQUE,
+                `nome_turma`     VARCHAR(100) NOT NULL,
+                `instituicao`    VARCHAR(100) NULL,
+                `qtd_equipes`    INT NOT NULL DEFAULT 6,
+                `caixa_inicial`  DECIMAL(12,2) NOT NULL DEFAULT 15000.00,
+                `status`         ENUM('ativo','pausado','encerrado') NOT NULL DEFAULT 'ativo',
+                `created_at`     DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `jogo_rodadas` (
+                `id`               INT AUTO_INCREMENT PRIMARY KEY,
+                `jogo_id`          INT NOT NULL,
+                `numero_rodada`    INT NOT NULL DEFAULT 1,
+                `mes_ano`          VARCHAR(20) NOT NULL DEFAULT 'Mês 01',
+                `status`           ENUM('aberta','processando','encerrada') NOT NULL DEFAULT 'aberta',
+                `evento_titulo`    VARCHAR(100) NOT NULL DEFAULT 'Mercado Estável',
+                `evento_descricao` TEXT NULL,
+                `fator_demanda`    DECIMAL(4,2) NOT NULL DEFAULT 1.00,
+                `created_at`       DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `equipes` (
+                `id`                  INT AUTO_INCREMENT PRIMARY KEY,
+                `jogo_id`             INT NOT NULL,
+                `nome`                VARCHAR(60) NOT NULL,
+                `codigo_acesso`       VARCHAR(40) NOT NULL UNIQUE,
+                `cor_hex`             VARCHAR(10) NOT NULL DEFAULT '#2d5a3f',
+                `caixa_disponivel`    DECIMAL(12,2) NOT NULL DEFAULT 15000.00,
+                `score_total`         INT NOT NULL DEFAULT 0,
+                `tacho_ultimo_aroma`  VARCHAR(10) NOT NULL DEFAULT 'LIMPO',
+                `tacho_higienizado`   TINYINT(1) NOT NULL DEFAULT 1,
+                `rodadas_no_vermelho` INT NOT NULL DEFAULT 0,
+                `falida`              TINYINT(1) NOT NULL DEFAULT 0,
+                `data_falencia`       DATETIME NULL,
+                `ativo`               TINYINT(1) NOT NULL DEFAULT 1,
+                `created_at`          DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `usuarios` (
+                `id`         INT AUTO_INCREMENT PRIMARY KEY,
+                `equipe_id`  INT NULL,
+                `nome`       VARCHAR(80) NOT NULL,
+                `email`      VARCHAR(100) NOT NULL UNIQUE,
+                `senha`      VARCHAR(255) NOT NULL,
+                `perfil`     ENUM('admin','pcp') NOT NULL DEFAULT 'pcp',
+                `ativo`      TINYINT(1) NOT NULL DEFAULT 1,
+                `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `produtos` (
+                `id`                INT AUTO_INCREMENT PRIMARY KEY,
+                `equipe_id`         INT NOT NULL,
+                `codigo`            VARCHAR(10) NOT NULL,
+                `nome`              VARCHAR(60) NOT NULL,
+                `aroma`             VARCHAR(60) NOT NULL,
+                `peso_barra_g`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
+                `intensidade_aroma` ENUM('suave','moderado','intenso') NOT NULL DEFAULT 'moderado',
+                `estoque_atual`     INT NOT NULL DEFAULT 150,
+                `estoque_minimo`    INT NOT NULL DEFAULT 50,
+                `preco_venda`       DECIMAL(10,2) NOT NULL DEFAULT 15.00,
+                `ativo`             TINYINT(1) NOT NULL DEFAULT 1,
+                UNIQUE KEY `uk_eq_prod` (`equipe_id`, `codigo`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `insumos` (
+                `id`             INT AUTO_INCREMENT PRIMARY KEY,
+                `equipe_id`      INT NOT NULL,
+                `codigo`         VARCHAR(15) NOT NULL,
+                `nome`           VARCHAR(80) NOT NULL,
+                `unidade`        VARCHAR(10) NOT NULL,
+                `estoque_atual`  DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+                `estoque_minimo` DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+                `custo_unitario` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                UNIQUE KEY `uk_eq_insumo` (`equipe_id`, `codigo`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `ficha_tecnica` (
+                `id`            INT AUTO_INCREMENT PRIMARY KEY,
+                `equipe_id`     INT NOT NULL,
+                `produto_id`    INT NOT NULL,
+                `insumo_id`     INT NOT NULL,
+                `qtd_por_barra` DECIMAL(10,4) NOT NULL,
+                UNIQUE KEY `uk_bom` (`equipe_id`, `produto_id`, `insumo_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `ordens_producao` (
+                `id`                   INT AUTO_INCREMENT PRIMARY KEY,
+                `equipe_id`            INT NOT NULL,
+                `rodada_id`            INT NOT NULL,
+                `numero`               VARCHAR(30) NOT NULL,
+                `produto_id`           INT NOT NULL,
+                `quantidade_planejada` INT NOT NULL,
+                `quantidade_produzida` INT NOT NULL DEFAULT 0,
+                `quantidade_refugo`    INT NOT NULL DEFAULT 0,
+                `data_programada`      DATE NOT NULL,
+                `data_inicio`          DATETIME NULL,
+                `data_finalizacao`     DATETIME NULL,
+                `status`               ENUM('planejada','em_producao','finalizada','cancelada') NOT NULL DEFAULT 'planejada',
+                `observacoes`          TEXT NULL,
+                `created_at`           DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY `uk_eq_op` (`equipe_id`, `numero`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `mov_estoque` (
+                `id`         INT AUTO_INCREMENT PRIMARY KEY,
+                `equipe_id`  INT NOT NULL,
+                `tipo`       ENUM('entrada','saida') NOT NULL,
+                `tipo_item`  ENUM('insumo','produto') NOT NULL,
+                `insumo_id`  INT NULL,
+                `produto_id` INT NULL,
+                `quantidade` DECIMAL(10,4) NOT NULL,
+                `op_id`      INT NULL,
+                `data_mov`   DATETIME DEFAULT CURRENT_TIMESTAMP,
+                `motivo`     VARCHAR(120) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `ranking_rodadas` (
+                `id`                INT AUTO_INCREMENT PRIMARY KEY,
+                `rodada_id`         INT NOT NULL,
+                `equipe_id`         INT NOT NULL,
+                `score_rodada`      INT NOT NULL DEFAULT 0,
+                `lucro_liquido`     DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                `otif_perc`         DECIMAL(5,2)  NOT NULL DEFAULT 0.00,
+                `taxa_refugo`       DECIMAL(5,2)  NOT NULL DEFAULT 0.00,
+                `tempo_setup_total` INT NOT NULL DEFAULT 0,
+                `penalidades`       INT NOT NULL DEFAULT 0,
+                `created_at`        DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY `uk_rk_rodada_eq` (`rodada_id`, `equipe_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        $pdo->exec("SET FOREIGN_KEY_CHECKS = 1;");
+
+        // 4. Cria o Usuário Instrutor se não existir
+        $stmt_adm = $pdo->prepare("SELECT id FROM usuarios WHERE email = 'admin@flora.com' LIMIT 1");
+        $stmt_adm->execute();
+        $admin_id = (int)$stmt_adm->fetchColumn();
+
+        if ($admin_id <= 0) {
+            $senhaPadraoHash = password_hash('123456', PASSWORD_BCRYPT);
+            $stmt_ins_adm = $pdo->prepare("
+                INSERT INTO usuarios (equipe_id, nome, email, senha, perfil)
+                VALUES (NULL, 'Instrutor do Jogo', 'admin@flora.com', ?, 'admin')
+            ");
+            $stmt_ins_adm->execute([$senhaPadraoHash]);
+            $admin_id = (int)$pdo->lastInsertId();
+        }
+
+        // 5. Cria uma Turma de Demonstração se nenhuma existir
+        $stmt_jg = $pdo->query("SELECT id FROM jogos LIMIT 1");
+        if (!$stmt_jg->fetchColumn()) {
+            criarNovoJogo($pdo, $admin_id, 'Turma Padrão (Demonstração)', 'TURMA-01', 6, 15000.00);
+        }
     }
 }
