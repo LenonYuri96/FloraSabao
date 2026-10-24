@@ -1,0 +1,99 @@
+/* ========================================================
+   Flora Sabão — Design System Cosmético / Industrial
+   ======================================================== */
+
+:root {
+  --flora-primary: #2d5a3f;
+  --flora-primary-hover: #234731;
+  --flora-secondary: #4f772d;
+  --flora-bg: #f7faf7;
+  --flora-card-bg: #ffffff;
+  --flora-accent: #eaf2eb;
+  --flora-border: #e2ece3;
+  --flora-text-main: #2b3a2f;
+}
+
+body {
+  background-color: var(--flora-bg);
+  color: var(--flora-text-main);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Navbar Personalizada */
+.navbar-flora {
+  background: linear-gradient(90deg, var(--flora-primary) 0%, #1f422d 100%);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.navbar-flora .nav-link {
+  color: rgba(255, 255, 255, 0.85) !important;
+  font-size: 0.92rem;
+  transition: color 0.15s ease-in-out;
+}
+
+.navbar-flora .nav-link:hover,
+.navbar-flora .nav-link.active {
+  color: #ffffff !important;
+}
+
+/* Cartões com elevação suave */
+.card-custom {
+  background: var(--flora-card-bg);
+  border: 1px solid var(--flora-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(45, 90, 63, 0.04);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.card-custom:hover {
+  box-shadow: 0 6px 20px rgba(45, 90, 63, 0.08);
+}
+
+/* Badges e Status */
+.badge-status {
+  font-size: 0.78rem;
+  padding: 0.45em 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 6px;
+}
+
+/* Tabelas */
+.table-hover tbody tr:hover {
+  background-color: rgba(45, 90, 63, 0.03);
+}
+
+.table thead th {
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  color: #5a7361;
+  font-weight: 700;
+}
+
+/* Animação suave para alertas */
+.alert {
+  border-radius: 10px;
+}
+
+/* Barra de Rolagem Suave */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #c3d4c6;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--flora-primary);
+}

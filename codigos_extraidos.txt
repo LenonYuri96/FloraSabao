@@ -1,0 +1,4508 @@
+==============================================================================
+ EXTRAÇÃO DE CÓDIGOS/ALGORITMOS — PROJETO: 
+ Gerado em: 23/10/2026 21:53:11
+ Total de arquivos: 27
+==============================================================================
+
+📂 SUMÁRIO DE ARQUIVOS
+------------------------------------------------------------------------------
+  api/estoque_api.php                              69 linhas     2783 bytes
+  api/op_api.php                                   32 linhas      916 bytes
+  api/produtos_api.php                             78 linhas     3186 bytes
+  assets/css/style.css                            100 linhas     2235 bytes
+  assets/js/main.js                                36 linhas     1089 bytes
+  assets/js/op.js                                 142 linhas     5980 bytes
+  assets/js/programacao.js                         34 linhas     1125 bytes
+  config/constants.php                             31 linhas     1150 bytes
+  config/database.php                              27 linhas      849 bytes
+  extrair_codigos.py                              317 linhas     9595 bytes
+  includes/auth.php                                27 linhas      868 bytes
+  includes/footer.php                              34 linhas     1274 bytes
+  includes/functions.php                          124 linhas     3709 bytes
+  includes/header.php                              27 linhas      880 bytes
+  includes/navbar.php                             102 linhas     5524 bytes
+  index.php                                       285 linhas    14137 bytes
+  login.php                                       147 linhas     5900 bytes
+  logout.php                                       32 linhas      672 bytes
+  pages/estoque.php                               589 linhas    31368 bytes
+  pages/insumos.php                               171 linhas     8289 bytes
+  pages/ordens_producao.php                       536 linhas    29576 bytes
+  pages/produtos.php                              382 linhas    20218 bytes
+  pages/programacao.php                           272 linhas    13510 bytes
+  pages/relatorios.php                            281 linhas    13997 bytes
+  README.md                                        31 linhas     1409 bytes
+  sql/flora_sabao.sql                             366 linhas     9324 bytes
+  sql/usuarios.sql                                 45 linhas     1390 bytes
+
+==============================================================================
+📄 [1/27] api/estoque_api.php
+    Extensão: .php | Linhas: 69 | Bytes: 2783
+==============================================================================
+<?php
+/**
+ * Flora Sabão — API de Gestão de Estoque & Matérias-Primas
+ */
+declare(strict_types=1);
+
+require_once __DIR__ . '/../config/database.php';
+header('Content-Type: application/json; charset=utf-8');
+
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+
+try {
+    switch ($action) {
+        // Retorna todos os insumos com status de estoque (Normal, Alerta ou Crítico)
+        case 'listar_insumos':
+            $stmt = $pdo->query("
+                SELECT id, codigo, nome, unidade, estoque_atual, estoque_minimo, custo_unitario,
+                       (estoque_atual * custo_unitario) AS valor_imobilizado,
+                       CASE 
+                           WHEN estoque_atual <= (estoque_minimo * 0.5) THEN 'CRITICO'
+                           WHEN estoque_atual <= estoque_minimo THEN 'ALERTA'
+                           ELSE 'NORMAL'
+                       END AS status_nivel
+                FROM insumos
+                ORDER BY nome ASC
+            ");
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll()]);
+            break;
+
+        // Retorna apenas insumos que necessitam de pedido de compra urgente
+        case 'insumos_criticos':
+            $stmt = $pdo->query("
+                SELECT codigo, nome, unidade, estoque_atual, estoque_minimo,
+                       (estoque_minimo - estoque_atual) AS necessidade_compra
+                FROM insumos
+                WHERE estoque_atual <= estoque_minimo
+                ORDER BY (estoque_atual / NULLIF(estoque_minimo, 0)) ASC
+            ");
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll()]);
+            break;
+
+        // Consulta saldo em tempo real de um insumo específico
+        case 'consultar_saldo':
+            $id = (int) ($_GET['id'] ?? 0);
+            if ($id <= 0) {
+                echo json_encode(['success' => false, 'message' => 'ID do insumo inválido.']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare("SELECT id, codigo, nome, unidade, estoque_atual, estoque_minimo FROM insumos WHERE id = ?");
+            $stmt->execute([$id]);
+            $insumo = $stmt->fetch();
+
+            if (!$insumo) {
+                echo json_encode(['success' => false, 'message' => 'Insumo não encontrado.']);
+                exit;
+            }
+
+            echo json_encode(['success' => true, 'insumo' => $insumo]);
+            break;
+
+        default:
+            echo json_encode(['success' => false, 'message' => 'Ação não suportada pelo endpoint de estoque.']);
+            break;
+    }
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Erro interno: ' . $e->getMessage()]);
+}
+
+
+==============================================================================
+📄 [2/27] api/op_api.php
+    Extensão: .php | Linhas: 32 | Bytes: 916
+==============================================================================
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/../config/database.php';
+header('Content-Type: application/json; charset=utf-8');
+
+$action = $_GET['action'] ?? '';
+
+if ($action === 'get_bom') {
+    $produto_id = (int) ($_GET['produto_id'] ?? 0);
+    $qtd = (int) ($_GET['qtd'] ?? 1);
+
+    if ($produto_id <= 0) {
+        echo json_encode(['success' => false, 'message' => 'Produto inválido']);
+        exit;
+    }
+
+    $stmt = $pdo->prepare("
+        SELECT ft.qtd_por_barra, i.nome, i.unidade, i.estoque_atual
+        FROM ficha_tecnica ft
+        JOIN insumos i ON ft.insumo_id = i.id
+        WHERE ft.produto_id = ?
+        ORDER BY i.nome ASC
+    ");
+    $stmt->execute([$produto_id]);
+    $items = $stmt->fetchAll();
+
+    echo json_encode(['success' => true, 'items' => $items]);
+    exit;
+}
+
+echo json_encode(['success' => false, 'message' => 'Ação não suportada']);
+
+
+==============================================================================
+📄 [3/27] api/produtos_api.php
+    Extensão: .php | Linhas: 78 | Bytes: 3186
+==============================================================================
+<?php
+/**
+ * Flora Sabão — API de Engenharia de Produtos & Ficha Técnica (BOM)
+ */
+declare(strict_types=1);
+
+require_once __DIR__ . '/../config/database.php';
+header('Content-Type: application/json; charset=utf-8');
+
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+
+try {
+    switch ($action) {
+        // Retorna todos os produtos ativos com custos de MP calculados dinamicamente
+        case 'listar_produtos':
+            $stmt = $pdo->query("
+                SELECT p.id, p.codigo, p.nome, p.aroma, p.intensidade_aroma,
+                       p.peso_barra_g, p.estoque_atual, p.estoque_minimo, p.preco_venda,
+                       COALESCE(SUM(ft.qtd_por_barra * i.custo_unitario), 0) AS custo_mp_unitario
+                FROM produtos p
+                LEFT JOIN ficha_tecnica ft ON p.id = ft.produto_id
+                LEFT JOIN insumos i ON ft.insumo_id = i.id
+                WHERE p.ativo = 1
+                GROUP BY p.id
+                ORDER BY p.codigo ASC
+            ");
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll()]);
+            break;
+
+        // Detalhes completos da Ficha Técnica de um produto específico
+        case 'ficha_tecnica':
+            $produto_id = (int) ($_GET['produto_id'] ?? 0);
+            if ($produto_id <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Produto não especificado.']);
+                exit;
+            }
+
+            $stmt_prod = $pdo->prepare("SELECT id, codigo, nome, aroma, preco_venda FROM produtos WHERE id = ?");
+            $stmt_prod->execute([$produto_id]);
+            $produto = $stmt_prod->fetch();
+
+            if (!$produto) {
+                echo json_encode(['success' => false, 'message' => 'Produto não encontrado.']);
+                exit;
+            }
+
+            $stmt_bom = $pdo->prepare("
+                SELECT ft.id AS bom_id, ft.qtd_por_barra,
+                       i.id AS insumo_id, i.codigo AS insumo_codigo, i.nome AS insumo_nome,
+                       i.unidade, i.custo_unitario, i.estoque_atual,
+                       (ft.qtd_por_barra * i.custo_unitario) AS subtotal_custo
+                FROM ficha_tecnica ft
+                JOIN insumos i ON ft.insumo_id = i.id
+                WHERE ft.produto_id = ?
+                ORDER BY i.nome ASC
+            ");
+            $stmt_bom->execute([$produto_id]);
+            $materiais = $stmt_bom->fetchAll();
+
+            $custo_total_mp = array_sum(array_column($materiais, 'subtotal_custo'));
+
+            echo json_encode([
+                'success' => true,
+                'produto' => $produto,
+                'custo_mp_barra' => $custo_total_mp,
+                'margem_bruta' => (float) $produto['preco_venda'] - $custo_total_mp,
+                'insumos' => $materiais
+            ]);
+            break;
+
+        default:
+            echo json_encode(['success' => false, 'message' => 'Ação não reconhecida.']);
+            break;
+    }
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Erro interno: ' . $e->getMessage()]);
+}
+
+
+==============================================================================
+📄 [4/27] assets/css/style.css
+    Extensão: .css | Linhas: 100 | Bytes: 2235
+==============================================================================
+/* ========================================================
+   Flora Sabão — Design System Cosmético / Industrial
+   ======================================================== */
+
+:root {
+  --flora-primary: #2d5a3f;
+  --flora-primary-hover: #234731;
+  --flora-secondary: #4f772d;
+  --flora-bg: #f7faf7;
+  --flora-card-bg: #ffffff;
+  --flora-accent: #eaf2eb;
+  --flora-border: #e2ece3;
+  --flora-text-main: #2b3a2f;
+}
+
+body {
+  background-color: var(--flora-bg);
+  color: var(--flora-text-main);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Navbar Personalizada */
+.navbar-flora {
+  background: linear-gradient(90deg, var(--flora-primary) 0%, #1f422d 100%);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.navbar-flora .nav-link {
+  color: rgba(255, 255, 255, 0.85) !important;
+  font-size: 0.92rem;
+  transition: color 0.15s ease-in-out;
+}
+
+.navbar-flora .nav-link:hover,
+.navbar-flora .nav-link.active {
+  color: #ffffff !important;
+}
+
+/* Cartões com elevação suave */
+.card-custom {
+  background: var(--flora-card-bg);
+  border: 1px solid var(--flora-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(45, 90, 63, 0.04);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.card-custom:hover {
+  box-shadow: 0 6px 20px rgba(45, 90, 63, 0.08);
+}
+
+/* Badges e Status */
+.badge-status {
+  font-size: 0.78rem;
+  padding: 0.45em 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 6px;
+}
+
+/* Tabelas */
+.table-hover tbody tr:hover {
+  background-color: rgba(45, 90, 63, 0.03);
+}
+
+.table thead th {
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  color: #5a7361;
+  font-weight: 700;
+}
+
+/* Animação suave para alertas */
+.alert {
+  border-radius: 10px;
+}
+
+/* Barra de Rolagem Suave */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #c3d4c6;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--flora-primary);
+}
+
+
+==============================================================================
+📄 [5/27] assets/js/main.js
+    Extensão: .js | Linhas: 36 | Bytes: 1089
+==============================================================================
+/**
+ * Flora Sabão — Scripts Gerais da Interface
+ */
+
+document.addEventListener("DOMContentLoaded", () => {
+  // 1. Fechar alertas flash de sucesso automaticamente após 4 segundos
+  const alertas = document.querySelectorAll(".alert-success");
+  alertas.forEach((alerta) => {
+    setTimeout(() => {
+      const bsAlert = bootstrap.Alert.getOrCreateInstance(alerta);
+      if (bsAlert) {
+        bsAlert.close();
+      }
+    }, 4000);
+  });
+
+  // 2. Confirmação genérica para links com atributo data-confirm
+  document.querySelectorAll("[data-confirm]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      const mensagem =
+        el.getAttribute("data-confirm") || "Deseja realmente prosseguir?";
+      if (!confirm(mensagem)) {
+        e.preventDefault();
+      }
+    });
+  });
+
+  // 3. Inicializar Tooltips do Bootstrap
+  const tooltipTriggerList = [].slice.call(
+    document.querySelectorAll('[data-bs-toggle="tooltip"]'),
+  );
+  tooltipTriggerList.map(
+    (tooltipTriggerEl) => new bootstrap.Tooltip(tooltipTriggerEl),
+  );
+});
+
+
+==============================================================================
+📄 [6/27] assets/js/op.js
+    Extensão: .js | Linhas: 142 | Bytes: 5980
+==============================================================================
+/**
+ * Flora Sabão — Lógica de Chão de Fábrica e Ordens de Produção (op.js)
+ */
+
+document.addEventListener("DOMContentLoaded", () => {
+  // 1. Controle do Modal de Apontamento Final de Produção
+  const modalApontarEl = document.getElementById("modalApontar");
+  if (modalApontarEl) {
+    const modalApontar = bootstrap.Modal.getOrCreateInstance(modalApontarEl);
+    const apontarOpId = document.getElementById("apontar_op_id");
+    const apontarOpNum = document.getElementById("apontar_op_num");
+    const apontarOpQtd = document.getElementById("apontar_op_qtd");
+    const apontarBoas = document.getElementById("apontar_boas");
+    const apontarRefugo = document.getElementById("apontar_refugo");
+
+    document.querySelectorAll(".btn-apontar").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const opId = btn.getAttribute("data-op-id");
+        const opNum = btn.getAttribute("data-op-num");
+        const qtd = btn.getAttribute("data-qtd");
+
+        apontarOpId.value = opId;
+        apontarOpNum.textContent = opNum;
+        apontarOpQtd.textContent = qtd;
+        apontarBoas.value = qtd;
+        apontarRefugo.value = 0;
+
+        modalApontar.show();
+      });
+    });
+  }
+
+  // 2. Cálculo e Renderização Dinâmica da Explosão de BOM
+  const modalBomEl = document.getElementById("modalBomExplosion");
+  if (modalBomEl) {
+    const modalBom = bootstrap.Modal.getOrCreateInstance(modalBomEl);
+    const container = document.getElementById("conteudoBomExplosion");
+
+    document.querySelectorAll(".btn-ver-bom").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const prodId = btn.getAttribute("data-prod-id");
+        const opQtd = parseInt(btn.getAttribute("data-qtd"), 10) || 1;
+        const opNum = btn.getAttribute("data-op-num");
+
+        container.innerHTML = `
+          <div class="alert alert-secondary py-2 small mb-3">
+            Simulação MRP para <strong>${opNum}</strong>: Lote de <strong>${opQtd} barras</strong>.
+          </div>
+          <div class="text-center py-4">
+            <div class="spinner-border text-success" role="status"></div>
+            <p class="small text-muted mt-2">Calculando explosão de materiais...</p>
+          </div>
+        `;
+
+        modalBom.show();
+
+        // Requisição para a API
+        const apiUrl = `../api/op_api.php?action=get_bom&produto_id=${prodId}&qtd=${opQtd}`;
+        fetch(apiUrl)
+          .then((res) => {
+            if (!res.ok) throw new Error("Erro na resposta da rede");
+            return res.json();
+          })
+          .then((data) => {
+            if (!data.success || !data.items || data.items.length === 0) {
+              container.innerHTML = `
+                <div class="alert alert-warning py-3">
+                  <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                  Não há Ficha Técnica (BOM) cadastrada para este produto.
+                </div>
+              `;
+              return;
+            }
+
+            let linhas = "";
+            let temRuptura = false;
+
+            data.items.forEach((item) => {
+              const nec = parseFloat(item.qtd_por_barra) * opQtd;
+              const estoque = parseFloat(item.estoque_atual);
+              const saldo = estoque - nec;
+              const falta = saldo < 0;
+
+              if (falta) temRuptura = true;
+
+              linhas += `
+                <tr class="${falta ? "table-danger" : ""}">
+                  <td><strong>${item.nome}</strong></td>
+                  <td class="font-monospace">${parseFloat(item.qtd_por_barra).toFixed(4)} ${item.unidade}</td>
+                  <td class="font-monospace fw-bold">${nec.toFixed(4)} ${item.unidade}</td>
+                  <td class="font-monospace">${estoque.toFixed(4)} ${item.unidade}</td>
+                  <td class="font-monospace fw-bold ${falta ? "text-danger" : "text-success"}">
+                    ${saldo.toFixed(4)} ${item.unidade}
+                  </td>
+                  <td>
+                    ${
+                      falta
+                        ? '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i> Ruptura</span>'
+                        : '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i> Suficiente</span>'
+                    }
+                  </td>
+                </tr>
+              `;
+            });
+
+            container.innerHTML = `
+              <div class="alert ${temRuptura ? "alert-danger" : "alert-success"} py-2 small mb-3">
+                ${
+                  temRuptura
+                    ? '<i class="bi bi-exclamation-octagon-fill me-1"></i> <strong>Risco de Parada:</strong> Um ou mais insumos não atendem à quantidade planejada.'
+                    : '<i class="bi bi-check-circle-fill me-1"></i> <strong>Tudo certo:</strong> Há matérias-primas suficientes para rodar este lote.'
+                }
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle mb-0">
+                  <thead class="table-light small text-uppercase">
+                    <tr>
+                      <th>Insumo</th>
+                      <th>Consumo/Barra</th>
+                      <th>Demanda Total</th>
+                      <th>Estoque Atual</th>
+                      <th>Saldo Projetado</th>
+                      <th>Status PCP</th>
+                    </tr>
+                  </thead>
+                  <tbody>${linhas}</tbody>
+                </table>
+              </div>
+            `;
+          })
+          .catch(() => {
+            container.innerHTML = `
+              <div class="alert alert-danger py-2 small">
+                Erro ao calcular a explosão de materiais. Verifique a conexão com o servidor.
+              </div>
+            `;
+          });
+      });
+    });
+  }
+});
+
+
+==============================================================================
+📄 [7/27] assets/js/programacao.js
+    Extensão: .js | Linhas: 34 | Bytes: 1125
+==============================================================================
+/**
+ * Flora Sabão — Sequenciamento & Gestão de Setup (programacao.js)
+ */
+
+document.addEventListener("DOMContentLoaded", () => {
+  // Realça visualmente linhas com alerta de contaminação cruzada ao passar o mouse
+  const linhasCriticas = document.querySelectorAll(
+    "tr.table-danger, tr.table-warning",
+  );
+  linhasCriticas.forEach((linha) => {
+    linha.addEventListener("mouseenter", () => {
+      linha.style.filter = "brightness(0.96)";
+    });
+    linha.addEventListener("mouseleave", () => {
+      linha.style.filter = "none";
+    });
+  });
+
+  // Notificação com contador regressivo ao executar a heurística de setup
+  const formHeuristica = document.querySelector(
+    'form[action="programacao.php"]',
+  );
+  if (formHeuristica) {
+    formHeuristica.addEventListener("submit", (e) => {
+      const btn = formHeuristica.querySelector('button[type="submit"]');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML =
+          '<span class="spinner-border spinner-border-sm me-1" role="status"></span> Otimizando sequenciamento...';
+      }
+    });
+  }
+});
+
+
+==============================================================================
+📄 [8/27] config/constants.php
+    Extensão: .php | Linhas: 31 | Bytes: 1150
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Constantes de Negócio e Parâmetros de PCP
+ */
+
+declare(strict_types=1);
+
+// Capacidade Fabril
+define('CAPACIDADE_MENSAL_BARRAS', 2500);
+define('CAPACIDADE_DIARIA_BARRAS', 120);
+define('TAMANHO_LOTE_PADRAO', 50); // Lotes múltiplos de 50 barras
+
+// Parâmetros de Setup (Troca de Lotes)
+define('TEMPO_SETUP_PADRAO_MIN', 20); // Mesma família/aroma
+define('TEMPO_SETUP_LIMPEZA_PESADA_MIN', 45); // Entre aromas fortes (evita contaminação)
+
+// Escala de fragrâncias para sequenciamento (Suave -> Intenso reduz tempo de limpeza)
+define('ORDEM_AROMAS_RECOMENDADA', [
+    'LAV' => 1, // Lavanda (suave)
+    'ROS' => 2, // Rosas (moderado floral)
+    'PIT' => 3, // Pitanga (moderado frutal)
+    'MAR' => 4  // Maracujá (cítrico intenso)
+]);
+
+// Status de Ordens de Produção
+define('STATUS_OP', [
+    'planejada'   => ['label' => 'Planejada',   'badge' => 'secondary'],
+    'em_producao' => ['label' => 'Em Produção', 'badge' => 'warning'],
+    'finalizada'  => ['label' => 'Finalizada',  'badge' => 'success'],
+    'cancelada'   => ['label' => 'Cancelada',   'badge' => 'danger']
+]);
+
+
+==============================================================================
+📄 [9/27] config/database.php
+    Extensão: .php | Linhas: 27 | Bytes: 849
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Conexão com o Banco de Dados (PDO)
+ */
+
+declare(strict_types=1);
+
+$db_host = 'localhost';
+$db_name = 'flora_sabao';
+$db_user = 'root';
+$db_pass = ''; // Altere se o seu MySQL local possuir senha
+$db_port = 3306;
+
+try {
+    $dsn = "mysql:host={$db_host};port={$db_port};dbname={$db_name};charset=utf8mb4";
+    
+    $options = [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES   => false,
+    ];
+
+    $pdo = new PDO($dsn, $db_user, $db_pass, $options);
+} catch (PDOException $e) {
+    // Para fins pedagógicos em sala, exibe o erro claro. Em produção real, logar em arquivo.
+    die('<strong>Erro na conexão com o banco de dados:</strong> ' . htmlspecialchars($e->getMessage()));
+}
+
+
+==============================================================================
+📄 [10/27] extrair_codigos.py
+    Extensão: .py | Linhas: 317 | Bytes: 9595
+==============================================================================
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+extrair_codigos.py
+------------------
+Percorre a estrutura do projeto "flora-sabao-pcp", lê o conteúdo de cada
+arquivo e gera um relatório consolidado com:
+    - Caminho (path) de cada arquivo
+    - Código / algoritmo (conteúdo) de cada arquivo
+
+Formatos de saída possíveis:
+    - .txt  (leitura humana, com separadores)
+    - .md   (Markdown, com blocos de código coloridos)
+    - .json (estruturado, bom para automação)
+
+Uso:
+    python extrair_codigos.py
+    python extrair_codigos.py --formato md
+    python extrair_codigos.py --formato json --saida relatorio.json
+"""
+
+import os
+import json
+import argparse
+from pathlib import Path
+from datetime import datetime
+
+# ------------------------------------------------------------------
+# Configurações padrão
+# ------------------------------------------------------------------
+PASTA_PROJETO_PADRAO = "flora-sabao-pcp"
+ARQUIVO_SAIDA_PADRAO = "codigos_extraidos"
+FORMATO_PADRAO = "txt"  # txt | md | json
+
+# Extensões que serão lidas como texto (código / algoritmo / config)
+EXTENSOES_TEXTO = {
+    ".php",
+    ".html",
+    ".htm",
+    ".css",
+    ".js",
+    ".json",
+    ".sql",
+    ".md",
+    ".txt",
+    ".py",
+    ".env",
+    ".xml",
+    ".htaccess",
+    ".gitignore",
+    ".ini",
+    ".yml",
+    ".yaml",
+    ".sh",
+    ".bat",
+    ".ps1",
+}
+
+# Pastas que devem ser ignoradas na varredura
+PASTAS_IGNORADAS = {
+    ".git",
+    "node_modules",
+    "vendor",
+    "__pycache__",
+    ".idea",
+    ".vscode",
+    "dist",
+    "build",
+}
+
+# Arquivos que devem ser ignorados
+ARQUIVOS_IGNORADOS = {
+    ".DS_Store",
+    "Thumbs.db",
+    "codigos_extraidos.txt",
+    "codigos_extraidos.md",
+    "codigos_extraidos.json",
+}
+
+
+# ------------------------------------------------------------------
+# Funções auxiliares
+# ------------------------------------------------------------------
+def eh_arquivo_texto(caminho: Path) -> bool:
+    """Verifica se o arquivo tem extensão de texto/código."""
+    return caminho.suffix.lower() in EXTENSOES_TEXTO or caminho.name in {
+        ".htaccess",
+        ".gitignore",
+        ".env",
+    }
+
+
+def ler_conteudo(caminho: Path) -> str:
+    """
+    Lê o conteúdo do arquivo tentando múltiplos encodings.
+    Retorna string vazia se não conseguir ler.
+    """
+    encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
+    for enc in encodings:
+        try:
+            return caminho.read_text(encoding=enc)
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+        except Exception as e:
+            return f"[ERRO AO LER: {e}]"
+    return "[ERRO: encoding não reconhecido]"
+
+
+def deve_ignorar(caminho: Path) -> bool:
+    """Verifica se o caminho (pasta ou arquivo) deve ser ignorado."""
+    partes = set(caminho.parts)
+    if partes & PASTAS_IGNORADAS:
+        return True
+    if caminho.name in ARQUIVOS_IGNORADOS:
+        return True
+    return False
+
+
+# ------------------------------------------------------------------
+# Coleta de arquivos
+# ------------------------------------------------------------------
+def coletar_arquivos(base: Path):
+    """
+    Percorre recursivamente a pasta e retorna uma lista de dicionários:
+        [{"path": "api/op_api.php", "ext": ".php", "conteudo": "...", "linhas": N, "bytes": M}, ...]
+    """
+    arquivos = []
+    for caminho in sorted(base.rglob("*")):
+        if not caminho.is_file():
+            continue
+        if deve_ignorar(caminho):
+            continue
+        if not eh_arquivo_texto(caminho):
+            continue
+
+        relativo = caminho.relative_to(base).as_posix()
+        conteudo = ler_conteudo(caminho)
+        arquivos.append(
+            {
+                "path": relativo,
+                "ext": caminho.suffix.lower(),
+                "conteudo": conteudo,
+                "linhas": conteudo.count("\n") + 1 if conteudo else 0,
+                "bytes": caminho.stat().st_size,
+            }
+        )
+    return arquivos
+
+
+# ------------------------------------------------------------------
+# Geradores de saída
+# ------------------------------------------------------------------
+def gerar_txt(arquivos, base):
+    linhas = []
+    linhas.append("=" * 78)
+    linhas.append(f" EXTRAÇÃO DE CÓDIGOS/ALGORITMOS — PROJETO: {base.name}")
+    linhas.append(f" Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    linhas.append(f" Total de arquivos: {len(arquivos)}")
+    linhas.append("=" * 78)
+    linhas.append("")
+
+    # Sumário
+    linhas.append("📂 SUMÁRIO DE ARQUIVOS")
+    linhas.append("-" * 78)
+    for a in arquivos:
+        linhas.append(
+            f"  {a['path']:<45}  {a['linhas']:>4} linhas  {a['bytes']:>7} bytes"
+        )
+    linhas.append("")
+
+    # Conteúdo
+    for i, a in enumerate(arquivos, 1):
+        linhas.append("=" * 78)
+        linhas.append(f"📄 [{i}/{len(arquivos)}] {a['path']}")
+        linhas.append(
+            f"    Extensão: {a['ext'] or '(sem extensão)'} | Linhas: {a['linhas']} | Bytes: {a['bytes']}"
+        )
+        linhas.append("=" * 78)
+        linhas.append(a["conteudo"].rstrip())
+        linhas.append("")
+        linhas.append("")
+
+    return "\n".join(linhas)
+
+
+def gerar_md(arquivos, base):
+    linhas = []
+    linhas.append(f"# 📦 Extração de Códigos — `{base.name}`")
+    linhas.append("")
+    linhas.append(f"> Gerado em **{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}**  ")
+    linhas.append(f"> Total de arquivos: **{len(arquivos)}**")
+    linhas.append("")
+
+    # Sumário
+    linhas.append("## 📂 Sumário")
+    linhas.append("")
+    linhas.append("| # | Caminho | Linhas | Bytes |")
+    linhas.append("|---|---------|-------:|------:|")
+    for i, a in enumerate(arquivos, 1):
+        linhas.append(f"| {i} | `{a['path']}` | {a['linhas']} | {a['bytes']} |")
+    linhas.append("")
+    linhas.append("---")
+    linhas.append("")
+
+    # Conteúdo
+    for i, a in enumerate(arquivos, 1):
+        linguagem = a["ext"].lstrip(".") or "text"
+        mapa = {
+            "php": "php",
+            "js": "javascript",
+            "css": "css",
+            "sql": "sql",
+            "html": "html",
+            "json": "json",
+            "md": "markdown",
+            "py": "python",
+        }
+        lang = mapa.get(linguagem, linguagem)
+
+        linhas.append(f"## 📄 {i}. `{a['path']}`")
+        linhas.append("")
+        linhas.append(f"- **Extensão:** `{a['ext'] or '(sem extensão)'}`")
+        linhas.append(f"- **Linhas:** {a['linhas']}")
+        linhas.append(f"- **Bytes:** {a['bytes']}")
+        linhas.append("")
+        linhas.append(f"```{lang}")
+        linhas.append(a["conteudo"].rstrip())
+        linhas.append("```")
+        linhas.append("")
+        linhas.append("---")
+        linhas.append("")
+
+    return "\n".join(linhas)
+
+
+def gerar_json(arquivos, base):
+    dados = {
+        "projeto": base.name,
+        "gerado_em": datetime.now().isoformat(),
+        "total_arquivos": len(arquivos),
+        "arquivos": [
+            {
+                "path": a["path"],
+                "extensao": a["ext"],
+                "linhas": a["linhas"],
+                "bytes": a["bytes"],
+                "conteudo": a["conteudo"],
+            }
+            for a in arquivos
+        ],
+    }
+    return json.dumps(dados, ensure_ascii=False, indent=2)
+
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(
+        description="Extrai códigos/algoritmos e caminhos do projeto Flora Sabão."
+    )
+    parser.add_argument(
+        "--pasta",
+        default=PASTA_PROJETO_PADRAO,
+        help=f"Pasta do projeto (padrão: {PASTA_PROJETO_PADRAO})",
+    )
+    parser.add_argument(
+        "--formato",
+        default=FORMATO_PADRAO,
+        choices=["txt", "md", "json"],
+        help=f"Formato de saída (padrão: {FORMATO_PADRAO})",
+    )
+    parser.add_argument(
+        "--saida",
+        default=None,
+        help="Nome do arquivo de saída (sem extensão, opcional)",
+    )
+    args = parser.parse_args()
+
+    base = Path(args.pasta)
+    if not base.exists() or not base.is_dir():
+        print(f"❌ Pasta não encontrada: {base.resolve()}")
+        return
+
+    print(f"\n🔍 Varrendo: {base.resolve()}")
+    arquivos = coletar_arquivos(base)
+
+    if not arquivos:
+        print("⚠  Nenhum arquivo de texto encontrado.")
+        return
+
+    print(f"✔ {len(arquivos)} arquivo(s) encontrado(s).\n")
+
+    # Gera o conteúdo conforme o formato
+    if args.formato == "txt":
+        conteudo_saida = gerar_txt(arquivos, base)
+    elif args.formato == "md":
+        conteudo_saida = gerar_md(arquivos, base)
+    else:
+        conteudo_saida = gerar_json(arquivos, base)
+
+    # Nome do arquivo de saída
+    nome_saida = args.saida or f"{ARQUIVO_SAIDA_PADRAO}.{args.formato}"
+    caminho_saida = Path(nome_saida)
+
+    caminho_saida.write_text(conteudo_saida, encoding="utf-8")
+
+    tamanho_kb = caminho_saida.stat().st_size / 1024
+    print(f"✅ Relatório gerado: {caminho_saida.resolve()}")
+    print(f"   • Formato:  {args.formato}")
+    print(f"   • Tamanho:  {tamanho_kb:.1f} KB")
+    print(f"   • Arquivos: {len(arquivos)}\n")
+
+
+if __name__ == "__main__":
+    main()
+
+
+==============================================================================
+📄 [11/27] includes/auth.php
+    Extensão: .php | Linhas: 27 | Bytes: 868
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Guarda Central de Autenticação
+ * -------------------------------------------------
+ * Deve ser incluído ANTES de qualquer consulta ao banco
+ * ou envio de HTML em páginas protegidas.
+ *
+ * Redireciona para login.php se não houver sessão ativa.
+ */
+declare(strict_types=1);
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+require_once __DIR__ . '/functions.php';
+
+// Detecta se estamos no root ou em /pages/
+// (reaproveita a mesma lógica já usada em navbar/header/footer)
+$GLOBALS['FS_URL_PREFIX'] = file_exists('pages') ? '' : '../';
+
+// 🚧 GUARDA: se não estiver logado, manda para o login
+if (empty($_SESSION['usuario_id'])) {
+    $_SESSION['flash_erro'] = 'Faça login para acessar o sistema.';
+    header('Location: ' . $GLOBALS['FS_URL_PREFIX'] . 'login.php');
+    exit;
+}
+
+
+==============================================================================
+📄 [12/27] includes/footer.php
+    Extensão: .php | Linhas: 34 | Bytes: 1274
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Footer Padrão
+ */
+$url_prefix = file_exists('pages') ? '' : '../';
+$current_page = basename($_SERVER['PHP_SELF']);
+?>
+<footer class="bg-white border-top py-3 mt-5 text-muted small">
+    <div class="container-fluid px-4 d-flex flex-column flex-sm-row justify-content-between align-items-center gap-2">
+        <div>
+            <strong>🌿 Flora Sabão</strong> — Simulador Didático de Gestão de PCP &bull; Microempresa Cosmética
+        </div>
+        <div>
+            Capacidade Fabril:
+            <strong><?= defined('CAPACIDADE_MENSAL_BARRAS') ? CAPACIDADE_MENSAL_BARRAS : 2500 ?></strong> barras/mês
+        </div>
+    </div>
+</footer>
+
+<!-- Bootstrap 5 Bundle JS com Popper -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Scripts Gerais da Aplicação -->
+<script src="<?= $url_prefix ?>assets/js/main.js"></script>
+
+<!-- Scripts Contextuais por Página -->
+<?php if ($current_page === 'ordens_producao.php'): ?>
+    <script src="<?= $url_prefix ?>assets/js/op.js"></script>
+<?php elseif ($current_page === 'programacao.php'): ?>
+    <script src="<?= $url_prefix ?>assets/js/programacao.js"></script>
+<?php endif; ?>
+</body>
+
+</html>
+
+
+==============================================================================
+📄 [13/27] includes/functions.php
+    Extensão: .php | Linhas: 124 | Bytes: 3709
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Funções Auxiliares Globais
+ */
+declare(strict_types=1);
+
+// ---------------------------------------------------------
+// FORMATAÇÃO
+// ---------------------------------------------------------
+function formatarMoeda(float $valor): string
+{
+    return 'R$ ' . number_format($valor, 2, ',', '.');
+}
+
+function formatarQtd(float $qtd, int $decimais = 4): string
+{
+    return number_format($qtd, $decimais, ',', '.');
+}
+
+function h(?string $str): string
+{
+    return htmlspecialchars($str ?? '', ENT_QUOTES, 'UTF-8');
+}
+
+// ---------------------------------------------------------
+// BADGE DE STATUS DA OP
+// ---------------------------------------------------------
+function renderBadgeStatusOP(string $status): string
+{
+    $mapa = [
+        'planejada' => ['label' => 'Planejada', 'class' => 'bg-secondary text-white'],
+        'em_producao' => ['label' => 'Em Produção', 'class' => 'bg-warning text-dark'],
+        'finalizada' => ['label' => 'Finalizada', 'class' => 'bg-success text-white'],
+        'cancelada' => ['label' => 'Cancelada', 'class' => 'bg-danger text-white'],
+    ];
+    $info = $mapa[$status] ?? ['label' => ucfirst($status), 'class' => 'bg-light text-dark border'];
+    return "<span class=\"badge {$info['class']} badge-status\">{$info['label']}</span>";
+}
+
+// ---------------------------------------------------------
+// 🔐 SESSÃO / AUTENTICAÇÃO
+// ---------------------------------------------------------
+function estaLogado(): bool
+{
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    return !empty($_SESSION['usuario_id']);
+}
+
+function usuarioAtual(): ?array
+{
+    if (!estaLogado()) {
+        return null;
+    }
+    return [
+        'id' => (int) $_SESSION['usuario_id'],
+        'nome' => $_SESSION['usuario_nome'] ?? '',
+        'email' => $_SESSION['usuario_email'] ?? '',
+        'perfil' => $_SESSION['usuario_perfil'] ?? 'user',
+    ];
+}
+
+/**
+ * Verifica se o usuário logado possui um dos perfis exigidos.
+ * Para admins, sempre libera.
+ */
+function possuiPerfil(array $perfisPermitidos): bool
+{
+    if (!estaLogado()) {
+        return false;
+    }
+    $perfil = $_SESSION['usuario_perfil'] ?? '';
+    return $perfil === 'admin' || in_array($perfil, $perfisPermitidos, true);
+}
+
+/**
+ * Exige que o usuário esteja logado E tenha um dos perfis.
+ * Redireciona com flash caso contrário.
+ */
+function exigirPerfis(array $perfisPermitidos): void
+{
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    $prefix = file_exists('pages') ? '' : '../';
+
+    if (!estaLogado()) {
+        $_SESSION['flash_erro'] = 'Faça login para acessar o sistema.';
+        header('Location: ' . $prefix . 'login.php');
+        exit;
+    }
+
+    if (!possuiPerfil($perfisPermitidos)) {
+        $_SESSION['flash_erro'] = 'Seu perfil não tem permissão para acessar esta área.';
+        header('Location: ' . $prefix . 'index.php');
+        exit;
+    }
+}
+
+// ---------------------------------------------------------
+// 📢 FLASH MESSAGES
+// ---------------------------------------------------------
+function flash(string $tipo, string $mensagem): void
+{
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    $_SESSION['flash_' . $tipo] = $mensagem;
+}
+
+function lerFlash(string $tipo): ?string
+{
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    $key = 'flash_' . $tipo;
+    if (!isset($_SESSION[$key])) {
+        return null;
+    }
+    $msg = $_SESSION[$key];
+    unset($_SESSION[$key]);
+    return $msg;
+}
+
+
+==============================================================================
+📄 [14/27] includes/header.php
+    Extensão: .php | Linhas: 27 | Bytes: 880
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Header Padrão
+ */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+$page_title = $page_title ?? 'Simulador PCP';
+$url_prefix = file_exists('pages') ? '' : '../';
+?>
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?= htmlspecialchars($page_title) ?> | Flora Sabão PCP</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <!-- Flora Sabão Custom Design System -->
+    <link href="<?= $url_prefix ?>assets/css/style.css" rel="stylesheet">
+</head>
+
+<body>
+
+
+==============================================================================
+📄 [15/27] includes/navbar.php
+    Extensão: .php | Linhas: 102 | Bytes: 5524
+==============================================================================
+<?php
+/**
+ * Flora Sabão — Barra de Navegação
+ */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// Detecta se está na raiz ou em subpasta (/pages/)
+$url_prefix = file_exists('pages') ? '' : '../';
+$current_page = basename($_SERVER['PHP_SELF']);
+?>
+<nav class="navbar navbar-expand-lg navbar-dark navbar-flora shadow-sm mb-4">
+    <div class="container-fluid px-4">
+        <!-- Logo / Marca -->
+        <a class="navbar-brand fw-bold d-flex align-items-center" href="<?= $url_prefix ?>index.php">
+            <i class="bi bi-flower1 fs-4 me-2 text-warning"></i>
+            <span>Flora Sabão <small class="fw-light opacity-75 fs-6">| PCP Lab</small></span>
+        </a>
+
+        <!-- Botão Mobile -->
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navFlora"
+            aria-controls="navFlora" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <!-- Menu Colapsável -->
+        <div class="collapse navbar-collapse" id="navFlora">
+            <!-- Links Principais -->
+            <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                <li class="nav-item">
+                    <a class="nav-link <?= $current_page === 'index.php' ? 'active fw-semibold' : '' ?>"
+                        href="<?= $url_prefix ?>index.php">
+                        <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?= $current_page === 'ordens_producao.php' ? 'active fw-semibold' : '' ?>"
+                        href="<?= $url_prefix ?>pages/ordens_producao.php">
+                        <i class="bi bi-clipboard2-check me-1"></i> Ordens de Produção
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?= $current_page === 'programacao.php' ? 'active fw-semibold' : '' ?>"
+                        href="<?= $url_prefix ?>pages/programacao.php">
+                        <i class="bi bi-calendar3 me-1"></i> Sequenciamento & Setup
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?= $current_page === 'estoque.php' ? 'active fw-semibold' : '' ?>"
+                        href="<?= $url_prefix ?>pages/estoque.php">
+                        <i class="bi bi-boxes me-1"></i> Estoque & Kardex
+                    </a>
+                </li>
+                <!-- Dropdown de Cadastros e Ficha Técnica -->
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle <?= in_array($current_page, ['produtos.php', 'insumos.php']) ? 'active fw-semibold' : '' ?>"
+                        href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-gear me-1"></i> Cadastros & BOM
+                    </a>
+                    <ul class="dropdown-menu shadow-sm">
+                        <li>
+                            <a class="dropdown-item <?= $current_page === 'produtos.php' ? 'active fw-semibold' : '' ?>"
+                                href="<?= $url_prefix ?>pages/produtos.php">
+                                <i class="bi bi-flower2 me-2 text-success"></i> Produtos & Ficha Técnica
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item <?= $current_page === 'insumos.php' ? 'active fw-semibold' : '' ?>"
+                                href="<?= $url_prefix ?>pages/insumos.php">
+                                <i class="bi bi-droplet me-2 text-success"></i> Catálogo de Insumos
+                            </a>
+                        </li>
+                    </ul>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?= $current_page === 'relatorios.php' ? 'active fw-semibold' : '' ?>"
+                        href="<?= $url_prefix ?>pages/relatorios.php">
+                        <i class="bi bi-graph-up-arrow me-1"></i> Indicadores PCP
+                    </a>
+                </li>
+            </ul>
+
+            <!-- Usuário Logado / Autenticação (Alinhado à Direita DENTRO da Navbar) -->
+            <div class="d-flex align-items-center gap-2 mt-2 mt-lg-0">
+                <?php if (isset($_SESSION['usuario_nome'])): ?>
+                    <span class="badge bg-light text-success fw-semibold py-2 px-3 border shadow-sm">
+                        <i class="bi bi-person-circle me-1"></i> <?= htmlspecialchars($_SESSION['usuario_nome']) ?>
+                        <span class="opacity-75">(<?= strtoupper($_SESSION['usuario_perfil'] ?? 'USER') ?>)</span>
+                    </span>
+                    <a href="<?= $url_prefix ?>logout.php" class="btn btn-sm btn-outline-light" title="Encerrar Sessão">
+                        <i class="bi bi-box-arrow-right me-1"></i> Sair
+                    </a>
+                <?php else: ?>
+                    <a href="<?= $url_prefix ?>login.php" class="btn btn-sm btn-light text-success fw-semibold shadow-sm">
+                        <i class="bi bi-box-arrow-in-right me-1"></i> Entrar
+                    </a>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</nav>
+
+
+==============================================================================
+📄 [16/27] index.php
+    Extensão: .php | Linhas: 285 | Bytes: 14137
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/includes/auth.php';
+
+require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/config/constants.php';
+
+$page_title = 'Painel do PCP';
+
+// ---------------------------------------------------------
+// CONSULTAS DO DASHBOARD (Métricas e Alertas)
+// ---------------------------------------------------------
+
+// 1. Total de OPs ativas (planejadas ou em produção)
+$stmt = $pdo->query("SELECT COUNT(*) FROM ordens_producao WHERE status IN ('planejada', 'em_producao')");
+$total_ops_ativas = (int) $stmt->fetchColumn();
+
+// 2. Volume produzido no mês atual
+$stmt = $pdo->query("
+    SELECT COALESCE(SUM(quantidade_produzida), 0) AS total_produzido,
+           COALESCE(SUM(quantidade_refugo), 0) AS total_refugo
+    FROM ordens_producao 
+    WHERE MONTH(data_programada) = MONTH(CURRENT_DATE()) 
+      AND YEAR(data_programada) = YEAR(CURRENT_DATE())
+");
+$metr_prod = $stmt->fetch();
+$total_produzido = (int) $metr_prod['total_produzido'];
+$total_refugo = (int) $metr_prod['total_refugo'];
+
+// Percentual de ocupação da capacidade mensal
+$perc_capacidade = min(100, round(($total_produzido / CAPACIDADE_MENSAL_BARRAS) * 100, 1));
+
+// 3. Insumos em estado crítico (estoque atual <= estoque mínimo)
+$stmt = $pdo->query("
+    SELECT codigo, nome, unidade, estoque_atual, estoque_minimo
+    FROM insumos
+    WHERE estoque_atual <= estoque_minimo
+    ORDER BY (estoque_atual / estoque_minimo) ASC
+");
+$insumos_criticos = $stmt->fetchAll();
+
+// 4. Saldo dos 4 Produtos Acabados
+$stmt = $pdo->query("SELECT id, codigo, nome, aroma, intensidade_aroma, estoque_atual, estoque_minimo FROM produtos ORDER BY id ASC");
+$produtos = $stmt->fetchAll();
+
+// 5. Lista das últimas 5 Ordens de Produção
+$stmt = $pdo->query("
+    SELECT op.id, op.numero, op.quantidade_planejada, op.quantidade_produzida, 
+           op.data_programada, op.status, op.observacoes,
+           p.nome AS produto_nome, p.codigo AS produto_codigo
+    FROM ordens_producao op
+    JOIN produtos p ON op.produto_id = p.id
+    ORDER BY op.data_programada ASC, op.id DESC
+    LIMIT 6
+");
+$ordens = $stmt->fetchAll();
+
+require_once __DIR__ . '/includes/header.php';
+require_once __DIR__ . '/includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <!-- Cabeçalho da Página -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-speedometer2 text-success me-2"></i>Painel de Controle da Produção
+            </h2>
+            <p class="text-muted mb-0">Visão integrada de ordens, capacidade produtiva e riscos de insumo.</p>
+        </div>
+        <div>
+            <a href="pages/ordens_producao.php" class="btn btn-success shadow-sm">
+                <i class="bi bi-plus-circle me-1"></i> Nova Ordem de Produção
+            </a>
+        </div>
+    </div>
+
+    <!-- Alerta Didático de Estoque Crítico (se houver ruptura iminente) -->
+    <?php if (!empty($insumos_criticos)): ?>
+    <div class="alert alert-danger border-0 shadow-sm d-flex align-items-center mb-4" role="alert">
+        <i class="bi bi-exclamation-triangle-fill fs-3 me-3 text-danger"></i>
+        <div>
+            <strong class="d-block">Atenção PCP: <?= count($insumos_criticos) ?> insumo(s) em nível crítico de
+                reposição!</strong>
+            <span>
+                <?php
+                    $nomes_criticos = array_map(function ($i) {
+                        return "<strong>{$i['nome']}</strong> (" . number_format((float) $i['estoque_atual'], 2, ',', '.') . " {$i['unidade']})";
+                    }, $insumos_criticos);
+                    echo implode(', ', $nomes_criticos);
+                    ?>. Verifique a lista antes de autorizar novos lotes.
+            </span>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- 4 Cards de Métricas (KPIs) -->
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold">OPs em Andamento</span>
+                        <h3 class="fw-bold my-1 text-dark"><?= $total_ops_ativas ?></h3>
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">Fila de
+                            Produção</span>
+                    </div>
+                    <div class="bg-primary-subtle text-primary p-3 rounded-3">
+                        <i class="bi bi-gear-wide-connected fs-4"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold">Produzido no Mês</span>
+                        <h3 class="fw-bold my-1 text-success"><?= number_format($total_produzido, 0, ',', '.') ?> <small
+                                class="fs-6 text-muted">barras</small></h3>
+                        <small class="text-muted"><?= $perc_capacidade ?>% da capacidade mensal</small>
+                    </div>
+                    <div class="bg-success-subtle text-success p-3 rounded-3">
+                        <i class="bi bi-box-seam fs-4"></i>
+                    </div>
+                </div>
+                <div class="progress mt-2" style="height: 6px;">
+                    <div class="progress-bar bg-success" style="width: <?= $perc_capacidade ?>%"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold">Perdas / Refugo</span>
+                        <h3 class="fw-bold my-1 text-danger"><?= number_format($total_refugo, 0, ',', '.') ?> <small
+                                class="fs-6 text-muted">barras</small></h3>
+                        <small class="text-muted">Taxa de refugo:
+                            <?= $total_produzido > 0 ? round(($total_refugo / ($total_produzido + $total_refugo)) * 100, 2) : 0 ?>%</small>
+                    </div>
+                    <div class="bg-danger-subtle text-danger p-3 rounded-3">
+                        <i class="bi bi-trash fs-4"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <span class="text-muted small text-uppercase fw-semibold">Insumos Críticos</span>
+                        <h3 class="fw-bold my-1 <?= count($insumos_criticos) > 0 ? 'text-danger' : 'text-success' ?>">
+                            <?= count($insumos_criticos) ?>
+                        </h3>
+                        <small
+                            class="text-muted"><?= count($insumos_criticos) > 0 ? 'Exigem reposição urgente' : 'Estoque equilibrado' ?></small>
+                    </div>
+                    <div
+                        class="<?= count($insumos_criticos) > 0 ? 'bg-danger-subtle text-danger' : 'bg-success-subtle text-success' ?> p-3 rounded-3">
+                        <i class="bi bi-bell fs-4"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <!-- Tabela: Ordens de Produção em Destaque -->
+        <div class="col-12 col-lg-8">
+            <div class="card card-custom p-3 bg-white h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="fw-bold mb-0 text-dark">
+                        <i class="bi bi-list-task me-2 text-secondary"></i>Ordens de Produção Recentes
+                    </h5>
+                    <a href="pages/ordens_producao.php" class="btn btn-sm btn-outline-secondary">Ver Todas</a>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light small text-uppercase">
+                            <tr>
+                                <th>OP</th>
+                                <th>Fragrância</th>
+                                <th>Data Prog.</th>
+                                <th>Qtd.</th>
+                                <th>Status</th>
+                                <th class="text-end">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (empty($ordens)): ?>
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">Nenhuma Ordem de Produção
+                                    cadastrada.</td>
+                            </tr>
+                            <?php else: ?>
+                            <?php foreach ($ordens as $op):
+                                    $st = STATUS_OP[$op['status']] ?? ['label' => $op['status'], 'badge' => 'secondary'];
+                                    ?>
+                            <tr>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($op['numero']) ?></td>
+                                <td>
+                                    <span
+                                        class="badge bg-light text-dark border me-1"><?= htmlspecialchars($op['produto_codigo']) ?></span>
+                                    <?= htmlspecialchars($op['produto_nome']) ?>
+                                </td>
+                                <td><?= date('d/m/Y', strtotime($op['data_programada'])) ?></td>
+                                <td>
+                                    <strong><?= $op['quantidade_produzida'] ?></strong> /
+                                    <?= $op['quantidade_planejada'] ?> un
+                                </td>
+                                <td>
+                                    <span class="badge bg-<?= $st['badge'] ?> badge-status">
+                                        <?= $st['label'] ?>
+                                    </span>
+                                </td>
+                                <td class="text-end">
+                                    <a href="pages/ordens_producao.php?id=<?= $op['id'] ?>"
+                                        class="btn btn-sm btn-outline-primary" title="Detalhes">
+                                        <i class="bi bi-eye"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Painel Lateral: Fragrâncias e Estoque Acabado -->
+        <div class="col-12 col-lg-4">
+            <div class="card card-custom p-3 bg-white h-100">
+                <h5 class="fw-bold mb-3 text-dark">
+                    <i class="bi bi-flower2 me-2 text-success"></i>Fragrâncias em Linha
+                </h5>
+
+                <div class="list-group list-group-flush">
+                    <?php foreach ($produtos as $p):
+                        $alerta_estoque = $p['estoque_atual'] <= $p['estoque_minimo'];
+                        ?>
+                    <div class="list-group-item px-0 py-3 border-bottom">
+                        <div class="d-flex justify-content-between align-items-start mb-1">
+                            <div>
+                                <strong class="text-dark"><?= htmlspecialchars($p['nome']) ?></strong>
+                                <div class="small text-muted">
+                                    Intensidade: <span
+                                        class="badge bg-secondary-subtle text-secondary"><?= ucfirst($p['intensidade_aroma']) ?></span>
+                                </div>
+                            </div>
+                            <div class="text-end">
+                                <span class="fw-bold fs-6 <?= $alerta_estoque ? 'text-danger' : 'text-dark' ?>">
+                                    <?= $p['estoque_atual'] ?> un
+                                </span>
+                                <div class="small text-muted">Mín: <?= $p['estoque_minimo'] ?> un</div>
+                            </div>
+                        </div>
+                        <?php if ($alerta_estoque): ?>
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle small mt-1">
+                            <i class="bi bi-arrow-down-circle me-1"></i>Abaixo do estoque mínimo
+                        </span>
+                        <?php endif; ?>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+
+                <div class="mt-3 pt-2">
+                    <a href="pages/programacao.php" class="btn btn-outline-success w-100">
+                        <i class="bi bi-diagram-3 me-1"></i> Ver Sequenciador de Setup
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php
+require_once __DIR__ . '/includes/footer.php';
+
+
+==============================================================================
+📄 [17/27] login.php
+    Extensão: .php | Linhas: 147 | Bytes: 5900
+==============================================================================
+<?php
+declare(strict_types=1);
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/includes/functions.php';
+
+// 🔁 Se já está logado, cai direto no dashboard
+if (estaLogado()) {
+    header('Location: index.php');
+    exit;
+}
+
+$erro = lerFlash('erro');
+$sucesso = lerFlash('sucesso');
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $email = trim($_POST['email'] ?? '');
+    $senha = $_POST['senha'] ?? '';
+
+    if (empty($email) || empty($senha)) {
+        $erro = 'Informe seu e-mail e senha cadastrados.';
+    } else {
+        $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE email = ? AND ativo = 1 LIMIT 1");
+        $stmt->execute([$email]);
+        $usuario = $stmt->fetch();
+
+        if ($usuario && password_verify($senha, $usuario['senha'])) {
+            // ✅ LOGIN OK
+            session_regenerate_id(true); // previne session fixation
+
+            $_SESSION['usuario_id'] = $usuario['id'];
+            $_SESSION['usuario_nome'] = $usuario['nome'];
+            $_SESSION['usuario_email'] = $usuario['email'];
+            $_SESSION['usuario_perfil'] = $usuario['perfil'];
+
+            flash('sucesso', 'Bem-vindo(a), ' . $usuario['nome'] . '!');
+            header('Location: index.php');
+            exit;
+        } else {
+            $erro = 'Credenciais incorretas ou usuário desativado.';
+        }
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | Flora Sabão PCP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+    body {
+        background: linear-gradient(135deg, #1e3f2b 0%, #355e3b 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .login-card {
+        border-radius: 16px;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.25);
+        max-width: 440px;
+        width: 100%;
+    }
+    </style>
+</head>
+
+<body>
+    <div class="container p-3">
+        <div class="card login-card mx-auto bg-white p-4">
+            <div class="text-center mb-4">
+                <div class="display-5 text-success mb-2"><i class="bi bi-flower1"></i></div>
+                <h3 class="fw-bold text-dark mb-1">Flora Sabão</h3>
+                <p class="text-muted small">Simulador Integrado de PCP & Manufatura Artesanal</p>
+            </div>
+
+            <?php if (!empty($sucesso)): ?>
+            <div class="alert alert-success py-2 small mb-3 border-0">
+                <i class="bi bi-check-circle-fill me-1"></i> <?= htmlspecialchars($sucesso) ?>
+            </div>
+            <?php endif; ?>
+
+            <?php if (!empty($erro)): ?>
+            <div class="alert alert-danger py-2 small mb-3 border-0">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i> <?= htmlspecialchars($erro) ?>
+            </div>
+            <?php endif; ?>
+
+            <form method="POST" action="login.php">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small text-muted">E-mail Corporativo</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-light"><i class="bi bi-envelope"></i></span>
+                        <input type="email" name="email" id="campoEmail" class="form-control"
+                            placeholder="nome@flora.com" required>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <label class="form-label fw-semibold small text-muted">Senha de Acesso</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
+                        <input type="password" name="senha" id="campoSenha" class="form-control" placeholder="••••••••"
+                            required>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-success w-100 py-2 fw-semibold shadow-sm mb-3">
+                    <i class="bi bi-box-arrow-in-right me-1"></i> Entrar no Sistema
+                </button>
+            </form>
+
+            <div class="border-top pt-3 text-center">
+                <span class="small text-muted d-block mb-2 fw-semibold">Acesso Rápido para a Dinâmica:</span>
+                <div class="btn-group btn-group-sm w-100">
+                    <button type="button" class="btn btn-outline-secondary"
+                        onclick="preencher('pcp@flora.com')">PCP</button>
+                    <button type="button" class="btn btn-outline-secondary"
+                        onclick="preencher('producao@flora.com')">Produção</button>
+                    <button type="button" class="btn btn-outline-secondary"
+                        onclick="preencher('estoque@flora.com')">Estoque</button>
+                    <button type="button" class="btn btn-outline-secondary"
+                        onclick="preencher('admin@flora.com')">Admin</button>
+                </div>
+                <div class="text-muted small mt-2">Senha padrão: <code>123456</code></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    function preencher(email) {
+        document.getElementById('campoEmail').value = email;
+        document.getElementById('campoSenha').value = '123456';
+    }
+    </script>
+</body>
+
+</html>
+
+
+==============================================================================
+📄 [18/27] logout.php
+    Extensão: .php | Linhas: 32 | Bytes: 672
+==============================================================================
+<?php
+declare(strict_types=1);
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// Limpa dados da sessão
+$_SESSION = [];
+
+// Expira o cookie de sessão
+if (ini_get("session.use_cookies")) {
+    $params = session_get_cookie_params();
+    setcookie(
+        session_name(),
+        '',
+        time() - 42000,
+        $params["path"],
+        $params["domain"],
+        $params["secure"],
+        $params["httponly"]
+    );
+}
+
+session_destroy();
+
+// Cria nova sessão só para carregar a flash de logout
+session_start();
+$_SESSION['flash_sucesso'] = 'Sessão encerrada com sucesso.';
+
+header('Location: login.php');
+exit;
+
+
+==============================================================================
+📄 [19/27] pages/estoque.php
+    Extensão: .php | Linhas: 589 | Bytes: 31368
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/../includes/auth.php';
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/constants.php';
+
+$page_title = 'Gestão de Estoque e Insumos';
+
+// Mensagens de feedback (Flash Messages)
+$mensagem_sucesso = '';
+$mensagem_erro = '';
+
+// ========================================================
+// PROCESSAMENTO DE FORMULÁRIOS (POST)
+// ========================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $acao = $_POST['acao'] ?? '';
+
+    // 1. Entrada / Saída Manual de Insumo
+    if ($acao === 'movimentar_insumo') {
+        $insumo_id = (int) ($_POST['insumo_id'] ?? 0);
+        $tipo = $_POST['tipo'] ?? ''; // 'entrada' ou 'saida'
+        $quantidade = (float) str_replace(',', '.', $_POST['quantidade'] ?? '0');
+        $motivo = trim($_POST['motivo'] ?? '');
+
+        if ($insumo_id <= 0 || !in_array($tipo, ['entrada', 'saida'], true) || $quantidade <= 0) {
+            $mensagem_erro = 'Informe um insumo válido, a operação e uma quantidade maior que zero.';
+        } elseif (empty($motivo)) {
+            $mensagem_erro = 'O campo motivo/justificativa é obrigatório para fins de rastreabilidade no PCP.';
+        } else {
+            try {
+                $pdo->beginTransaction();
+
+                // Busca insumo atual
+                $stmt = $pdo->prepare("SELECT nome, estoque_atual, unidade FROM insumos WHERE id = ? FOR UPDATE");
+                $stmt->execute([$insumo_id]);
+                $insumo = $stmt->fetch();
+
+                if (!$insumo) {
+                    throw new Exception('Insumo não localizado.');
+                }
+
+                if ($tipo === 'saida' && $quantidade > (float) $insumo['estoque_atual']) {
+                    throw new Exception("Saldo insuficiente no estoque para saída. Saldo atual: {$insumo['estoque_atual']} {$insumo['unidade']}.");
+                }
+
+                // Atualiza estoque do insumo
+                $sql_update = $tipo === 'entrada'
+                    ? "UPDATE insumos SET estoque_atual = estoque_atual + ? WHERE id = ?"
+                    : "UPDATE insumos SET estoque_atual = estoque_atual - ? WHERE id = ?";
+                $stmt_up = $pdo->prepare($sql_update);
+                $stmt_up->execute([$quantidade, $insumo_id]);
+
+                // Registra na tabela mov_estoque
+                $stmt_mov = $pdo->prepare("
+                    INSERT INTO mov_estoque (tipo, tipo_item, insumo_id, quantidade, motivo) 
+                    VALUES (?, 'insumo', ?, ?, ?)
+                ");
+                $stmt_mov->execute([$tipo, $insumo_id, $quantidade, $motivo]);
+
+                $pdo->commit();
+                $mensagem_sucesso = "Movimentação registrada com sucesso para o insumo \"{$insumo['nome']}\"!";
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $mensagem_erro = $e->getMessage();
+            }
+        }
+    }
+
+    // 2. Ajuste Manual de Produto Acabado
+    if ($acao === 'movimentar_produto') {
+        $produto_id = (int) ($_POST['produto_id'] ?? 0);
+        $tipo = $_POST['tipo'] ?? '';
+        $quantidade = (int) ($_POST['quantidade'] ?? 0);
+        $motivo = trim($_POST['motivo'] ?? '');
+
+        if ($produto_id <= 0 || !in_array($tipo, ['entrada', 'saida'], true) || $quantidade <= 0) {
+            $mensagem_erro = 'Informe a fragrância, operação e quantidade de barras válidas.';
+        } elseif (empty($motivo)) {
+            $mensagem_erro = 'Justifique o motivo do ajuste de estoque.';
+        } else {
+            try {
+                $pdo->beginTransaction();
+
+                $stmt = $pdo->prepare("SELECT nome, estoque_atual FROM produtos WHERE id = ? FOR UPDATE");
+                $stmt->execute([$produto_id]);
+                $produto = $stmt->fetch();
+
+                if (!$produto) {
+                    throw new Exception('Produto não encontrado.');
+                }
+
+                if ($tipo === 'saida' && $quantidade > (int) $produto['estoque_atual']) {
+                    throw new Exception("Saldo insuficiente de barras acabadas. Saldo atual: {$produto['estoque_atual']} un.");
+                }
+
+                $sql_update = $tipo === 'entrada'
+                    ? "UPDATE produtos SET estoque_atual = estoque_atual + ? WHERE id = ?"
+                    : "UPDATE produtos SET estoque_atual = estoque_atual - ? WHERE id = ?";
+                $stmt_up = $pdo->prepare($sql_update);
+                $stmt_up->execute([$quantidade, $produto_id]);
+
+                $stmt_mov = $pdo->prepare("
+                    INSERT INTO mov_estoque (tipo, tipo_item, produto_id, quantidade, motivo) 
+                    VALUES (?, 'produto', ?, ?, ?)
+                ");
+                $stmt_mov->execute([$tipo, $produto_id, $quantidade, $motivo]);
+
+                $pdo->commit();
+                $mensagem_sucesso = "Ajuste de estoque concluído para \"{$produto['nome']}\"!";
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $mensagem_erro = $e->getMessage();
+            }
+        }
+    }
+}
+
+// ========================================================
+// CONSULTAS PARA CARGA DA PÁGINA
+// ========================================================
+
+// 1. Insumos com cálculo de valor financeiro imobilizado
+$stmt_insumos = $pdo->query("
+    SELECT id, codigo, nome, unidade, estoque_atual, estoque_minimo, custo_unitario,
+           (estoque_atual * custo_unitario) AS valor_total,
+           CASE 
+               WHEN estoque_atual <= (estoque_minimo * 0.5) THEN 'CRITICO'
+               WHEN estoque_atual <= estoque_minimo THEN 'ALERTA'
+               ELSE 'NORMAL'
+           END AS status_nivel
+    FROM insumos
+    ORDER BY (estoque_atual / NULLIF(estoque_minimo, 0)) ASC, nome ASC
+");
+$insumos = $stmt_insumos->fetchAll();
+
+// Total financeiro em insumos
+$total_capital_insumos = array_sum(array_column($insumos, 'valor_total'));
+
+// 2. Produtos acabados
+$stmt_produtos = $pdo->query("
+    SELECT id, codigo, nome, aroma, intensidade_aroma, estoque_atual, estoque_minimo, preco_venda,
+           (estoque_atual * preco_venda) AS valor_potencial,
+           CASE 
+               WHEN estoque_atual <= estoque_minimo THEN 'ALERTA'
+               ELSE 'NORMAL'
+           END AS status_nivel
+    FROM produtos
+    ORDER BY codigo ASC
+");
+$produtos = $stmt_produtos->fetchAll();
+$total_barras_acabadas = array_sum(array_column($produtos, 'estoque_atual'));
+
+// 3. Últimas 15 Movimentações no Estoque (Auditoria)
+$stmt_movs = $pdo->query("
+    SELECT m.id, m.tipo, m.tipo_item, m.quantidade, m.data_mov, m.motivo,
+           i.nome AS insumo_nome, i.unidade AS insumo_unidade,
+           p.nome AS produto_nome,
+           op.numero AS op_numero
+    FROM mov_estoque m
+    LEFT JOIN insumos i ON m.insumo_id = i.id
+    LEFT JOIN produtos p ON m.produto_id = p.id
+    LEFT JOIN ordens_producao op ON m.op_id = op.id
+    ORDER BY m.data_mov DESC, m.id DESC
+    LIMIT 20
+");
+$movimentacoes = $stmt_movs->fetchAll();
+
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <!-- Cabeçalho -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-boxes text-success me-2"></i>Controle de Estoque & Matéria-Prima
+            </h2>
+            <p class="text-muted mb-0">Gestão de ponto de reposição, valor imobilizado e rastreamento de entradas e
+                saídas.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-success shadow-sm" data-bs-toggle="modal"
+                data-bs-target="#modalAjusteProduto">
+                <i class="bi bi-box-arrow-in-down me-1"></i> Ajustar Barra Acabada
+            </button>
+            <button class="btn btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#modalMovInsumo">
+                <i class="bi bi-plus-circle me-1"></i> Entrada / Saída de Insumo
+            </button>
+        </div>
+    </div>
+
+    <!-- Alertas Flash -->
+    <?php if (!empty($mensagem_sucesso)): ?>
+    <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert">
+        <i class="bi bi-check-circle-fill me-2"></i> <?= htmlspecialchars($mensagem_sucesso) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($mensagem_erro)): ?>
+    <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> <?= htmlspecialchars($mensagem_erro) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <?php endif; ?>
+
+    <!-- Resumo dos Indicadores de Estoque -->
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-sm-6 col-lg-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Capital em Matéria-Prima</span>
+                <h4 class="fw-bold my-1 text-dark">R$ <?= number_format($total_capital_insumos, 2, ',', '.') ?></h4>
+                <small class="text-muted"><?= count($insumos) ?> matérias-primas e embalagens</small>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-lg-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Barras Acabadas no Estoque</span>
+                <h4 class="fw-bold my-1 text-primary"><?= number_format($total_barras_acabadas, 0, ',', '.') ?> <small
+                        class="fs-6 text-muted">un</small></h4>
+                <small class="text-muted">Distribuídas em 4 fragrâncias</small>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-lg-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Insumos em Alerta/Crítico</span>
+                <?php
+                $cont_alerta = count(array_filter($insumos, fn($i) => $i['status_nivel'] !== 'NORMAL'));
+                ?>
+                <h4 class="fw-bold my-1 <?= $cont_alerta > 0 ? 'text-danger' : 'text-success' ?>">
+                    <?= $cont_alerta ?>
+                </h4>
+                <small class="text-muted">Abaixo do estoque de segurança</small>
+            </div>
+        </div>
+        <div class="col-12 col-sm-6 col-lg-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Política de Reposição</span>
+                <h5 class="fw-bold my-1 text-dark">Lote Mínimo PCP</h5>
+                <small class="text-muted">Giro quinzenal planejado</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navegação por Abas (Tabs) -->
+    <div class="card card-custom bg-white">
+        <div class="card-header bg-white border-bottom-0 pt-3 px-4">
+            <ul class="nav nav-pills card-header-pills" id="estoqueTab" role="tablist">
+                <li class="nav-item">
+                    <button class="nav-link active fw-semibold" id="insumos-tab" data-bs-toggle="tab"
+                        data-bs-target="#insumos-pane" type="button" role="tab">
+                        <i class="bi bi-droplet-half me-1"></i> Matérias-Primas & Insumos (BOM)
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link fw-semibold" id="produtos-tab" data-bs-toggle="tab"
+                        data-bs-target="#produtos-pane" type="button" role="tab">
+                        <i class="bi bi-box2 me-1"></i> Produtos Acabados
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link fw-semibold" id="movs-tab" data-bs-toggle="tab" data-bs-target="#movs-pane"
+                        type="button" role="tab">
+                        <i class="bi bi-journal-text me-1"></i> Histórico / Kardex
+                    </button>
+                </li>
+            </ul>
+        </div>
+
+        <div class="card-body p-4">
+            <div class="tab-content" id="estoqueTabContent">
+
+                <!-- ABA 1: MATÉRIAS-PRIMAS -->
+                <div class="tab-pane fade show active" id="insumos-pane" role="tabpanel">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold mb-0 text-muted text-uppercase">Posição Geral de Insumos</h6>
+                        <span class="text-muted small">Valores decimais com 4 casas (pesagem e fracionamento de
+                            precisão)</span>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light small text-uppercase">
+                                <tr>
+                                    <th>Cód.</th>
+                                    <th>Insumo</th>
+                                    <th>Estoque Atual</th>
+                                    <th>Estoque Mínimo</th>
+                                    <th>Custo Unit.</th>
+                                    <th>Valor Total</th>
+                                    <th>Status Reposição</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($insumos as $ins):
+                                    $atual = (float) $ins['estoque_atual'];
+                                    $min = (float) $ins['estoque_minimo'];
+                                    $perc_seguranca = $min > 0 ? min(100, round(($atual / $min) * 100)) : 100;
+                                    ?>
+                                <tr>
+                                    <td><span
+                                            class="badge bg-light text-secondary border font-monospace"><?= htmlspecialchars($ins['codigo']) ?></span>
+                                    </td>
+                                    <td><strong><?= htmlspecialchars($ins['nome']) ?></strong></td>
+                                    <td>
+                                        <span
+                                            class="fs-6 fw-bold <?= $ins['status_nivel'] !== 'NORMAL' ? 'text-danger' : 'text-dark' ?>">
+                                            <?= number_format($atual, 4, ',', '.') ?>
+                                        </span>
+                                        <small class="text-muted"><?= $ins['unidade'] ?></small>
+                                    </td>
+                                    <td>
+                                        <?= number_format($min, 4, ',', '.') ?> <small
+                                            class="text-muted"><?= $ins['unidade'] ?></small>
+                                    </td>
+                                    <td>R$ <?= number_format((float) $ins['custo_unitario'], 2, ',', '.') ?></td>
+                                    <td class="fw-semibold text-dark">R$
+                                        <?= number_format((float) $ins['valor_total'], 2, ',', '.') ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($ins['status_nivel'] === 'CRITICO'): ?>
+                                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                                            <i class="bi bi-x-octagon me-1"></i> Crítico (< 50% do mín) </span>
+                                                <?php elseif ($ins['status_nivel'] === 'ALERTA'): ?>
+                                                <span
+                                                    class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                                                    <i class="bi bi-exclamation-triangle me-1"></i> Ponto de Reposição
+                                                </span>
+                                                <?php else: ?>
+                                                <span
+                                                    class="badge bg-success-subtle text-success border border-success-subtle">
+                                                    <i class="bi bi-check2-circle me-1"></i> Seguro
+                                                </span>
+                                                <?php endif; ?>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ABA 2: PRODUTOS ACABADOS -->
+                <div class="tab-pane fade" id="produtos-pane" role="tabpanel">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light small text-uppercase">
+                                <tr>
+                                    <th>Cód.</th>
+                                    <th>Fragrância</th>
+                                    <th>Intensidade Aroma</th>
+                                    <th>Estoque Físico</th>
+                                    <th>Estoque de Segurança</th>
+                                    <th>Preço Venda</th>
+                                    <th>Valor Total em Estoque</th>
+                                    <th>Situação</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($produtos as $prod):
+                                    $alerta = $prod['estoque_atual'] <= $prod['estoque_minimo'];
+                                    ?>
+                                <tr>
+                                    <td><span
+                                            class="badge bg-secondary font-monospace"><?= htmlspecialchars($prod['codigo']) ?></span>
+                                    </td>
+                                    <td>
+                                        <strong><?= htmlspecialchars($prod['nome']) ?></strong>
+                                        <div class="small text-muted"><?= htmlspecialchars($prod['aroma']) ?></div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-light text-dark border">
+                                            <?= ucfirst($prod['intensidade_aroma']) ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="fs-5 fw-bold <?= $alerta ? 'text-danger' : 'text-success' ?>">
+                                            <?= $prod['estoque_atual'] ?>
+                                        </span> <small class="text-muted">barras (100g)</small>
+                                    </td>
+                                    <td><?= $prod['estoque_minimo'] ?> barras</td>
+                                    <td>R$ <?= number_format((float) $prod['preco_venda'], 2, ',', '.') ?></td>
+                                    <td class="fw-semibold">R$
+                                        <?= number_format((float) $prod['valor_potencial'], 2, ',', '.') ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($alerta): ?>
+                                        <span
+                                            class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                                            Requer Produção
+                                        </span>
+                                        <?php else: ?>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                            Atende Demanda
+                                        </span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ABA 3: HISTÓRICO DE MOVIMENTAÇÕES (KARDEX) -->
+                <div class="tab-pane fade" id="movs-pane" role="tabpanel">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                            <thead class="table-light small text-uppercase">
+                                <tr>
+                                    <th>Data / Hora</th>
+                                    <th>Tipo</th>
+                                    <th>Item</th>
+                                    <th>Qtd.</th>
+                                    <th>Referência / Motivo</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($movimentacoes)): ?>
+                                <tr>
+                                    <td colspan="5" class="text-center py-4 text-muted">Nenhuma movimentação registrada
+                                        até o momento.</td>
+                                </tr>
+                                <?php else: ?>
+                                <?php foreach ($movimentacoes as $mov):
+                                        $is_entrada = $mov['tipo'] === 'entrada';
+                                        $item_nome = $mov['tipo_item'] === 'insumo'
+                                            ? htmlspecialchars($mov['insumo_nome']) . " ({$mov['insumo_unidade']})"
+                                            : htmlspecialchars($mov['produto_nome']) . " (barras)";
+                                        ?>
+                                <tr>
+                                    <td class="small text-muted"><?= date('d/m/Y H:i', strtotime($mov['data_mov'])) ?>
+                                    </td>
+                                    <td>
+                                        <span
+                                            class="badge bg-<?= $is_entrada ? 'success-subtle text-success border border-success-subtle' : 'danger-subtle text-danger border border-danger-subtle' ?>">
+                                            <i
+                                                class="bi bi-arrow-<?= $is_entrada ? 'down-left' : 'up-right' ?> me-1"></i>
+                                            <?= strtoupper($mov['tipo']) ?>
+                                        </span>
+                                    </td>
+                                    <td><strong><?= $item_nome ?></strong></td>
+                                    <td
+                                        class="font-monospace fw-bold <?= $is_entrada ? 'text-success' : 'text-danger' ?>">
+                                        <?= $is_entrada ? '+' : '-' ?>
+                                        <?= number_format((float) $mov['quantidade'], 4, ',', '.') ?>
+                                    </td>
+                                    <td>
+                                        <?= htmlspecialchars($mov['motivo']) ?>
+                                        <?php if (!empty($mov['op_numero'])): ?>
+                                        <span
+                                            class="badge bg-light text-dark border ms-1"><?= htmlspecialchars($mov['op_numero']) ?></span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL 1: ENTRADA / SAÍDA DE INSUMO                      -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalMovInsumo" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="estoque.php" class="modal-content">
+            <input type="hidden" name="acao" value="movimentar_insumo">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-droplet-half text-success me-2"></i>Movimentar Insumo /
+                    Matéria-Prima</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Insumo:</label>
+                    <select name="insumo_id" class="form-select" required>
+                        <option value="">Selecione...</option>
+                        <?php foreach ($insumos as $ins): ?>
+                        <option value="<?= $ins['id'] ?>">
+                            <?= htmlspecialchars($ins['nome']) ?> (Atual:
+                            <?= number_format((float) $ins['estoque_atual'], 4, ',', '.') ?> <?= $ins['unidade'] ?>)
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Tipo:</label>
+                        <select name="tipo" class="form-select" required>
+                            <option value="entrada">Entrada (+ Compra/Reposição)</option>
+                            <option value="saida">Saída (- Descarte/Ajuste)</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Quantidade:</label>
+                        <input type="number" step="0.0001" min="0.0001" name="quantidade" class="form-control"
+                            placeholder="0.0000" required>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Motivo / Documento:</label>
+                    <input type="text" name="motivo" class="form-control"
+                        placeholder="Ex: NF 4029 - Fornecedor Glicerina / Descarte validade" required>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-success"><i class="bi bi-check2 me-1"></i> Confirmar
+                    Lançamento</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL 2: AJUSTE DE PRODUTO ACABADO                      -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalAjusteProduto" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="estoque.php" class="modal-content">
+            <input type="hidden" name="acao" value="movimentar_produto">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-box2 text-primary me-2"></i>Ajustar Estoque de Barras
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Fragrância:</label>
+                    <select name="produto_id" class="form-select" required>
+                        <option value="">Selecione...</option>
+                        <?php foreach ($produtos as $p): ?>
+                        <option value="<?= $p['id'] ?>">
+                            [<?= $p['codigo'] ?>] <?= htmlspecialchars($p['nome']) ?> (Atual: <?= $p['estoque_atual'] ?>
+                            un)
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Tipo:</label>
+                        <select name="tipo" class="form-select" required>
+                            <option value="entrada">Entrada (+ Inventário físico)</option>
+                            <option value="saida">Saída (- Venda/Amostra/Avaria)</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Barras (unidades):</label>
+                        <input type="number" step="1" min="1" name="quantidade" class="form-control"
+                            placeholder="Qtd. inteira" required>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Motivo do Ajuste:</label>
+                    <input type="text" name="motivo" class="form-control"
+                        placeholder="Ex: Inventário de contagem física semanal" required>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i> Gravar Ajuste</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+
+
+==============================================================================
+📄 [20/27] pages/insumos.php
+    Extensão: .php | Linhas: 171 | Bytes: 8289
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/../includes/auth.php';
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/constants.php';
+$page_title = 'Cadastro de Insumos & Matérias-Primas';
+$mensagem_sucesso = '';
+$mensagem_erro = '';
+
+// PROCESSAMENTO DO FORMULÁRIO (POST)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $acao = $_POST['acao'] ?? '';
+
+    if ($acao === 'salvar_insumo') {
+        $codigo = strtoupper(trim($_POST['codigo'] ?? ''));
+        $nome = trim($_POST['nome'] ?? '');
+        $unidade = trim($_POST['unidade'] ?? 'kg');
+        $estoque_min = (float) str_replace(',', '.', $_POST['estoque_minimo'] ?? '0');
+        $custo_unit = (float) str_replace(',', '.', $_POST['custo_unitario'] ?? '0');
+
+        if (empty($codigo) || empty($nome) || $custo_unit <= 0) {
+            $mensagem_erro = 'Preencha código, nome e custo unitário válido.';
+        } else {
+            try {
+                $stmt = $pdo->prepare("
+                    INSERT INTO insumos (codigo, nome, unidade, estoque_minimo, custo_unitario)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE 
+                        nome = VALUES(nome),
+                        unidade = VALUES(unidade),
+                        estoque_minimo = VALUES(estoque_minimo),
+                        custo_unitario = VALUES(custo_unitario)
+                ");
+                $stmt->execute([$codigo, $nome, $unidade, $estoque_min, $custo_unit]);
+                $mensagem_sucesso = "Insumo {$codigo} gravado com sucesso!";
+            } catch (PDOException $e) {
+                $mensagem_erro = 'Erro ao salvar insumo: ' . $e->getMessage();
+            }
+        }
+    }
+}
+
+$insumos = $pdo->query("SELECT * FROM insumos ORDER BY nome ASC")->fetchAll();
+
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-droplet-half text-success me-2"></i>Catálogo de Insumos & Custos
+            </h2>
+            <p class="text-muted mb-0">Parametrização de custos de compra e estoque de segurança para o cálculo do MRP.
+            </p>
+        </div>
+        <div>
+            <button class="btn btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#modalInsumo">
+                <i class="bi bi-plus-circle me-1"></i> Novo Insumo / Atualizar Custo
+            </button>
+        </div>
+    </div>
+
+    <?php if (!empty($mensagem_sucesso)): ?>
+    <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert">
+        <i class="bi bi-check-circle-fill me-2"></i> <?= htmlspecialchars($mensagem_sucesso) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <?php endif; ?>
+    <?php if (!empty($mensagem_erro)): ?>
+    <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> <?= htmlspecialchars($mensagem_erro) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <?php endif; ?>
+
+    <div class="card card-custom bg-white p-3">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light small text-uppercase">
+                    <tr>
+                        <th>Código</th>
+                        <th>Descrição da Matéria-Prima</th>
+                        <th>Unidade</th>
+                        <th>Estoque Atual</th>
+                        <th>Ponto de Pedido (Mínimo)</th>
+                        <th>Custo Unitário</th>
+                        <th>Total em Saldo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($insumos as $ins):
+                        $total = (float) $ins['estoque_atual'] * (float) $ins['custo_unitario'];
+                        ?>
+                    <tr>
+                        <td><span
+                                class="badge bg-light text-secondary border font-monospace"><?= htmlspecialchars($ins['codigo']) ?></span>
+                        </td>
+                        <td><strong><?= htmlspecialchars($ins['nome']) ?></strong></td>
+                        <td><span class="badge bg-light text-dark border"><?= $ins['unidade'] ?></span></td>
+                        <td class="font-monospace fw-bold">
+                            <?= number_format((float) $ins['estoque_atual'], 4, ',', '.') ?>
+                        </td>
+                        <td class="font-monospace text-muted">
+                            <?= number_format((float) $ins['estoque_minimo'], 4, ',', '.') ?>
+                        </td>
+                        <td>R$ <?= number_format((float) $ins['custo_unitario'], 2, ',', '.') ?></td>
+                        <td class="fw-semibold text-dark">R$ <?= number_format($total, 2, ',', '.') ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL CADASTRAR/EDITAR INSUMO -->
+<div class="modal fade" id="modalInsumo" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="insumos.php" class="modal-content">
+            <input type="hidden" name="acao" value="salvar_insumo">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square text-success me-2"></i>Parametrizar Insumo
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Código:</label>
+                        <input type="text" name="codigo" class="form-control" placeholder="ESS-CHA" required>
+                    </div>
+                    <div class="col-8">
+                        <label class="form-label fw-semibold">Descrição do Insumo:</label>
+                        <input type="text" name="nome" class="form-control" placeholder="Essência Chá Branco" required>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Unidade:</label>
+                        <select name="unidade" class="form-select">
+                            <option value="kg">kg (Quilo)</option>
+                            <option value="L">L (Litro)</option>
+                            <option value="un">un (Unidade)</option>
+                        </select>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Estoque Mínimo:</label>
+                        <input type="number" step="0.0001" name="estoque_minimo" class="form-control"
+                            placeholder="1.0000" required>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Custo Unit. (R$):</label>
+                        <input type="text" name="custo_unitario" class="form-control" placeholder="95,00" required>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+                <button type="submit" class="btn btn-success"><i class="bi bi-save me-1"></i> Gravar Insumo</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+
+
+==============================================================================
+📄 [21/27] pages/ordens_producao.php
+    Extensão: .php | Linhas: 536 | Bytes: 29576
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/../includes/auth.php';
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/constants.php';
+$page_title = 'Ordens de Produção (OP)';
+$mensagem_sucesso = '';
+$mensagem_erro = '';
+
+// ========================================================
+// PROCESSAMENTO DE AÇÕES DE PCP (POST)
+// ========================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $acao = $_POST['acao'] ?? '';
+
+    // 1. CRIAR NOVA OP (Planejamento)
+    if ($acao === 'criar_op') {
+        $produto_id = (int) ($_POST['produto_id'] ?? 0);
+        $qtd_planejada = (int) ($_POST['quantidade_planejada'] ?? 0);
+        $data_prog = $_POST['data_programada'] ?? '';
+        $obs = trim($_POST['observacoes'] ?? '');
+
+        if ($produto_id <= 0 || $qtd_planejada <= 0 || empty($data_prog)) {
+            $mensagem_erro = 'Selecione o produto, informe quantidade positiva e data válida.';
+        } else {
+            // Gerar número sequencial de OP (ex: OP-2026-004)
+            $ano = date('Y', strtotime($data_prog));
+            $stmt_count = $pdo->query("SELECT COUNT(*) + 1 FROM ordens_producao");
+            $seq = str_pad((string) $stmt_count->fetchColumn(), 3, '0', STR_PAD_LEFT);
+            $numero_op = "OP-{$ano}-{$seq}";
+
+            $stmt = $pdo->prepare("
+                INSERT INTO ordens_producao (numero, produto_id, quantidade_planejada, data_programada, status, observacoes)
+                VALUES (?, ?, ?, ?, 'planejada', ?)
+            ");
+            $stmt->execute([$numero_op, $produto_id, $qtd_planejada, $data_prog, $obs]);
+            $mensagem_sucesso = "Ordem de Produção {$numero_op} criada com sucesso!";
+        }
+    }
+
+    // 2. INICIAR PRODUÇÃO (Liberar chão de fábrica)
+    if ($acao === 'iniciar_op') {
+        $op_id = (int) ($_POST['op_id'] ?? 0);
+        $stmt = $pdo->prepare("UPDATE ordens_producao SET status = 'em_producao', data_inicio = NOW() WHERE id = ? AND status = 'planejada'");
+        $stmt->execute([$op_id]);
+        $mensagem_sucesso = 'Status da OP atualizado para "Em Produção".';
+    }
+
+    // 3. FINALIZAR OP (Apontamento de Boas + Refugo e Baixa Automática de Insumos)
+    if ($acao === 'finalizar_op') {
+        $op_id = (int) ($_POST['op_id'] ?? 0);
+        $qtd_produzida = (int) ($_POST['quantidade_produzida'] ?? 0);
+        $qtd_refugo = (int) ($_POST['quantidade_refugo'] ?? 0);
+
+        if ($op_id <= 0 || ($qtd_produzida + $qtd_refugo) <= 0) {
+            $mensagem_erro = 'A soma de barras boas e refugo deve ser maior que zero.';
+        } else {
+            try {
+                $pdo->beginTransaction();
+
+                // 3.1 Busca a OP com lock
+                $stmt_op = $pdo->prepare("SELECT * FROM ordens_producao WHERE id = ? FOR UPDATE");
+                $stmt_op->execute([$op_id]);
+                $op = $stmt_op->fetch();
+
+                if (!$op || $op['status'] === 'finalizada') {
+                    throw new Exception('OP não encontrada ou já finalizada.');
+                }
+
+                $total_processado = $qtd_produzida + $qtd_refugo;
+
+                // 3.2 Explosão da BOM para consumir os insumos do total processado (Boas + Perdas)
+                $stmt_bom = $pdo->prepare("
+                    SELECT ft.insumo_id, ft.qtd_por_barra, i.nome, i.estoque_atual, i.unidade
+                    FROM ficha_tecnica ft
+                    JOIN insumos i ON ft.insumo_id = i.id
+                    WHERE ft.produto_id = ?
+                ");
+                $stmt_bom->execute([$op['produto_id']]);
+                $ingredientes = $stmt_bom->fetchAll();
+
+                if (empty($ingredientes)) {
+                    throw new Exception('Esta fragrância não possui Ficha Técnica cadastrada. Configure a BOM antes de finalizar.');
+                }
+
+                // 3.3 Consome os insumos e gera registro no Kardex
+                foreach ($ingredientes as $ing) {
+                    $qtd_consumida = $ing['qtd_por_barra'] * $total_processado;
+
+                    // Baixa o estoque do insumo
+                    $stmt_baixa = $pdo->prepare("UPDATE insumos SET estoque_atual = estoque_atual - ? WHERE id = ?");
+                    $stmt_baixa->execute([$qtd_consumida, $ing['insumo_id']]);
+
+                    // Registra saída no histórico
+                    $stmt_mov_ins = $pdo->prepare("
+                        INSERT INTO mov_estoque (tipo, tipo_item, insumo_id, quantidade, op_id, motivo)
+                        VALUES ('saida', 'insumo', ?, ?, ?, ?)
+                    ");
+                    $stmt_mov_ins->execute([$ing['insumo_id'], $qtd_consumida, $op_id, "Consumo Produção {$op['numero']}"]);
+                }
+
+                // 3.4 Incrementa o estoque do produto acabado (apenas barras boas aprovadas)
+                if ($qtd_produzida > 0) {
+                    $stmt_prod_up = $pdo->prepare("UPDATE produtos SET estoque_atual = estoque_atual + ? WHERE id = ?");
+                    $stmt_prod_up->execute([$qtd_produzida, $op['produto_id']]);
+
+                    // Registra entrada de produto acabado no histórico
+                    $stmt_mov_p = $pdo->prepare("
+                        INSERT INTO mov_estoque (tipo, tipo_item, produto_id, quantidade, op_id, motivo)
+                        VALUES ('entrada', 'produto', ?, ?, ?, ?)
+                    ");
+                    $stmt_mov_p->execute([$op['produto_id'], $qtd_produzida, $op_id, "Entrada PA Lote {$op['numero']}"]);
+                }
+
+                // 3.5 Atualiza a OP
+                $stmt_finaliza = $pdo->prepare("
+                    UPDATE ordens_producao 
+                    SET quantidade_produzida = ?, quantidade_refugo = ?, data_finalizacao = NOW(), status = 'finalizada'
+                    WHERE id = ?
+                ");
+                $stmt_finaliza->execute([$qtd_produzida, $qtd_refugo, $op_id]);
+
+                $pdo->commit();
+                $mensagem_sucesso = "OP {$op['numero']} finalizada! Foram estocadas {$qtd_produzida} barras e os insumos foram baixados automaticamente.";
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $mensagem_erro = $e->getMessage();
+            }
+        }
+    }
+
+    // 4. CANCELAR OP
+    if ($acao === 'cancelar_op') {
+        $op_id = (int) ($_POST['op_id'] ?? 0);
+        $stmt = $pdo->prepare("UPDATE ordens_producao SET status = 'cancelada' WHERE id = ? AND status != 'finalizada'");
+        $stmt->execute([$op_id]);
+        $mensagem_sucesso = 'Ordem de Produção cancelada.';
+    }
+}
+
+// ========================================================
+// CONSULTAS DA LISTAGEM
+// ========================================================
+$filtro_status = $_GET['status'] ?? 'todos';
+$sql_where = $filtro_status !== 'todos' ? "WHERE op.status = " . $pdo->quote($filtro_status) : "";
+
+$stmt_ops = $pdo->query("
+    SELECT op.*, p.nome AS produto_nome, p.codigo AS produto_codigo, p.aroma, p.intensidade_aroma
+    FROM ordens_producao op
+    JOIN produtos p ON op.produto_id = p.id
+    {$sql_where}
+    ORDER BY op.data_programada DESC, op.id DESC
+");
+$ordens = $stmt_ops->fetchAll();
+
+// Produtos para o formulário de nova OP
+$produtos_select = $pdo->query("SELECT id, codigo, nome FROM produtos WHERE ativo = 1 ORDER BY nome")->fetchAll();
+
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <!-- Topo -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-clipboard2-check text-success me-2"></i>Ordens de Produção (OP)
+            </h2>
+            <p class="text-muted mb-0">Programação de lotes, explosão de materiais (BOM) e apontamento de refugos.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <button class="btn btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#modalNovaOP">
+                <i class="bi bi-plus-circle me-1"></i> Emitir Nova OP
+            </button>
+        </div>
+    </div>
+
+    <!-- Alertas Flash -->
+    <?php if (!empty($mensagem_sucesso)): ?>
+        <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert">
+            <i class="bi bi-check-circle-fill me-2"></i> <?= htmlspecialchars($mensagem_sucesso) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+    <?php if (!empty($mensagem_erro)): ?>
+        <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i> <?= htmlspecialchars($mensagem_erro) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <!-- Barra de Filtros -->
+    <div class="card card-custom bg-white p-3 mb-4">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="text-muted small fw-semibold me-2 text-uppercase">Filtrar por Status:</span>
+            <a href="ordens_producao.php?status=todos"
+                class="btn btn-sm <?= $filtro_status === 'todos' ? 'btn-dark' : 'btn-outline-secondary' ?>">Todas</a>
+            <a href="ordens_producao.php?status=planejada"
+                class="btn btn-sm <?= $filtro_status === 'planejada' ? 'btn-secondary text-white' : 'btn-outline-secondary' ?>">Planejadas</a>
+            <a href="ordens_producao.php?status=em_producao"
+                class="btn btn-sm <?= $filtro_status === 'em_producao' ? 'btn-warning text-dark' : 'btn-outline-warning text-dark' ?>">Em
+                Produção</a>
+            <a href="ordens_producao.php?status=finalizada"
+                class="btn btn-sm <?= $filtro_status === 'finalizada' ? 'btn-success' : 'btn-outline-success' ?>">Finalizadas</a>
+            <a href="ordens_producao.php?status=cancelada"
+                class="btn btn-sm <?= $filtro_status === 'cancelada' ? 'btn-danger' : 'btn-outline-danger' ?>">Canceladas</a>
+        </div>
+    </div>
+
+    <!-- Tabela Geral de OPs -->
+    <div class="card card-custom bg-white p-3">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light small text-uppercase">
+                    <tr>
+                        <th>Número OP</th>
+                        <th>Fragrância</th>
+                        <th>Programada</th>
+                        <th>Planejado</th>
+                        <th>Apontado (Boas / Refugo)</th>
+                        <th>Status</th>
+                        <th class="text-end">Ações de PCP</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($ordens)): ?>
+                        <tr>
+                            <td colspan="7" class="text-center py-4 text-muted">Nenhuma ordem de produção encontrada para os
+                                filtros atuais.</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($ordens as $op):
+                            $st = STATUS_OP[$op['status']] ?? ['label' => $op['status'], 'badge' => 'secondary'];
+                            ?>
+                            <tr>
+                                <td class="fw-bold font-monospace text-dark">
+                                    <?= htmlspecialchars($op['numero']) ?>
+                                    <?php if (!empty($op['observacoes'])): ?>
+                                        <i class="bi bi-info-circle text-muted ms-1"
+                                            title="<?= htmlspecialchars($op['observacoes']) ?>"></i>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span
+                                        class="badge bg-light text-dark border me-1"><?= htmlspecialchars($op['produto_codigo']) ?></span>
+                                    <strong><?= htmlspecialchars($op['produto_nome']) ?></strong>
+                                </td>
+                                <td><?= date('d/m/Y', strtotime($op['data_programada'])) ?></td>
+                                <td class="fw-bold"><?= $op['quantidade_planejada'] ?> un</td>
+                                <td>
+                                    <?php if ($op['status'] === 'finalizada'): ?>
+                                        <span class="text-success fw-bold"><?= $op['quantidade_produzida'] ?> boas</span>
+                                        <?php if ($op['quantidade_refugo'] > 0): ?>
+                                            / <span class="text-danger"><?= $op['quantidade_refugo'] ?> refugo</span>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="text-muted">—</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="badge bg-<?= $st['badge'] ?> badge-status"><?= $st['label'] ?></span>
+                                </td>
+                                <td class="text-end">
+                                    <div class="btn-group btn-group-sm">
+                                        <!-- Botão Ver Explosão de Materiais (BOM) -->
+                                        <button type="button" class="btn btn-outline-secondary btn-ver-bom"
+                                            data-op-id="<?= $op['id'] ?>" data-op-num="<?= $op['numero'] ?>"
+                                            data-prod-id="<?= $op['produto_id'] ?>"
+                                            data-qtd="<?= $op['quantidade_planejada'] ?>" title="Explosão de Insumos">
+                                            <i class="bi bi-diagram-2"></i> BOM
+                                        </button>
+
+                                        <!-- Ação: Iniciar Produção -->
+                                        <?php if ($op['status'] === 'planejada'): ?>
+                                            <form method="POST" action="ordens_producao.php" class="d-inline">
+                                                <input type="hidden" name="acao" value="iniciar_op">
+                                                <input type="hidden" name="op_id" value="<?= $op['id'] ?>">
+                                                <button type="submit" class="btn btn-outline-warning text-dark"
+                                                    title="Iniciar Fabricação">
+                                                    <i class="bi bi-play-fill"></i> Iniciar
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+
+                                        <!-- Ação: Finalizar / Apontar -->
+                                        <?php if ($op['status'] === 'em_producao'): ?>
+                                            <button type="button" class="btn btn-outline-success btn-apontar"
+                                                data-op-id="<?= $op['id'] ?>" data-op-num="<?= $op['numero'] ?>"
+                                                data-qtd="<?= $op['quantidade_planejada'] ?>" title="Apontar Produção">
+                                                <i class="bi bi-check2-circle"></i> Apontar
+                                            </button>
+                                        <?php endif; ?>
+
+                                        <!-- Ação: Cancelar -->
+                                        <?php if (in_array($op['status'], ['planejada', 'em_producao'])): ?>
+                                            <form method="POST" action="ordens_producao.php" class="d-inline"
+                                                onsubmit="return confirm('Tem certeza que deseja cancelar esta OP?');">
+                                                <input type="hidden" name="acao" value="cancelar_op">
+                                                <input type="hidden" name="op_id" value="<?= $op['id'] ?>">
+                                                <button type="submit" class="btn btn-outline-danger" title="Cancelar OP">
+                                                    <i class="bi bi-x-circle"></i>
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: NOVA OP                                           -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalNovaOP" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="ordens_producao.php" class="modal-content">
+            <input type="hidden" name="acao" value="criar_op">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-clipboard2-plus text-success me-2"></i>Emitir Ordem de
+                    Produção</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Fragrância (Produto):</label>
+                    <select name="produto_id" class="form-select" required>
+                        <option value="">Selecione o sabonete...</option>
+                        <?php foreach ($produtos_select as $p): ?>
+                            <option value="<?= $p['id'] ?>">[<?= $p['codigo'] ?>] <?= htmlspecialchars($p['nome']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Quantidade Planejada:</label>
+                        <input type="number" step="50" min="50" name="quantidade_planejada" class="form-control"
+                            value="100" required>
+                        <small class="text-muted">Lotes em múltiplos de 50 barras.</small>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Data Programada:</label>
+                        <input type="date" name="data_programada" class="form-control" value="<?= date('Y-m-d') ?>"
+                            required>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Observações / Instruções PCP:</label>
+                    <textarea name="observacoes" class="form-control" rows="2"
+                        placeholder="Ex: Higienização prévia dos tachos obrigatória..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-success"><i class="bi bi-check2 me-1"></i> Gravar Ordem</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: APONTAMENTO DE PRODUÇÃO & REFUGO                 -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalApontar" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="ordens_producao.php" class="modal-content">
+            <input type="hidden" name="acao" value="finalizar_op">
+            <input type="hidden" name="op_id" id="apontar_op_id" value="">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-check2-circle text-success me-2"></i>Apontamento Final
+                    de Produção</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info py-2 small mb-3">
+                    Ordem: <strong id="apontar_op_num"></strong> | Planejado original: <strong
+                        id="apontar_op_qtd"></strong> barras.
+                </div>
+                <p class="small text-muted mb-3">
+                    Ao confirmar, o sistema dará entrada no estoque das barras boas e <strong>baixará automaticamente
+                        todos os insumos</strong> proporcionais ao total processado (boas + refugo) via Ficha Técnica.
+                </p>
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label fw-semibold text-success">Barras Aprovadas (Boas):</label>
+                        <input type="number" step="1" min="0" name="quantidade_produzida" id="apontar_boas"
+                            class="form-control form-control-lg fw-bold" required>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold text-danger">Refugo (Perdas / Defeito):</label>
+                        <input type="number" step="1" min="0" name="quantidade_refugo" id="apontar_refugo"
+                            class="form-control form-control-lg fw-bold" value="0" required>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Voltar</button>
+                <button type="submit" class="btn btn-success"><i class="bi bi-box-arrow-in-down me-1"></i> Concluir e
+                    Baixar Estoque</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: EXPLOSÃO DE MATERIAIS DA OP (BOM EXPLOSION)       -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalBomExplosion" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-diagram-2 text-primary me-2"></i>Explosão da Lista de
+                    Materiais (BOM)</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="conteudoBomExplosion">
+                <div class="text-center py-4">
+                    <div class="spinner-border text-success" role="status"></div>
+                    <p class="small text-muted mt-2">Calculando necessidades de insumos...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        // 1. Script para Modal de Apontamento
+        const modalApontar = new bootstrap.Modal(document.getElementById('modalApontar'));
+        document.querySelectorAll('.btn-apontar').forEach(btn => {
+            btn.addEventListener('click', function () {
+                document.getElementById('apontar_op_id').value = this.dataset.opId;
+                document.getElementById('apontar_op_num').textContent = this.dataset.opNum;
+                document.getElementById('apontar_op_qtd').textContent = this.dataset.qtd;
+                document.getElementById('apontar_boas').value = this.dataset.qtd;
+                document.getElementById('apontar_refugo').value = 0;
+                modalApontar.show();
+            });
+        });
+
+        // 2. Script para Modal de Explosão de BOM (Calculado em tempo real)
+        const modalBom = new bootstrap.Modal(document.getElementById('modalBomExplosion'));
+        document.querySelectorAll('.btn-ver-bom').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const prodId = this.dataset.prodId;
+                const opQtd = parseInt(this.dataset.qtd, 10);
+                const opNum = this.dataset.opNum;
+                const container = document.getElementById('conteudoBomExplosion');
+
+                container.innerHTML = `
+                <div class="alert alert-secondary py-2 small mb-3">
+                    Simulação para <strong>${opNum}</strong>: Lote de <strong>${opQtd} barras</strong>.
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered align-middle mb-0">
+                        <thead class="table-light small text-uppercase">
+                            <tr>
+                                <th>Insumo</th>
+                                <th>Consumo / Barra</th>
+                                <th>Necessidade Total</th>
+                                <th>Estoque Atual</th>
+                                <th>Saldo Projetado</th>
+                                <th>Situação PCP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabelaBomBody">
+                            <tr><td colspan="6" class="text-center py-3 text-muted">Carregando...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+                modalBom.show();
+
+                // Fetch AJAX leve para obter a BOM do produto
+                fetch(`../api/op_api.php?action=get_bom&produto_id=${prodId}&qtd=${opQtd}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        const tbody = document.getElementById('tabelaBomBody');
+                        if (!data.success || data.items.length === 0) {
+                            tbody.innerHTML =
+                                '<tr><td colspan="6" class="text-center text-danger py-3">Ficha técnica não definida para este sabonete!</td></tr>';
+                            return;
+                        }
+
+                        let html = '';
+                        let ruptura = false;
+
+                        data.items.forEach(item => {
+                            const nec = item.qtd_por_barra * opQtd;
+                            const saldo = item.estoque_atual - nec;
+                            const falta = saldo < 0;
+                            if (falta) ruptura = true;
+
+                            html += `
+                            <tr class="${falta ? 'table-danger' : ''}">
+                                <td><strong>${item.nome}</strong></td>
+                                <td class="font-monospace">${parseFloat(item.qtd_por_barra).toFixed(4)} ${item.unidade}</td>
+                                <td class="font-monospace fw-bold">${nec.toFixed(4)} ${item.unidade}</td>
+                                <td class="font-monospace">${parseFloat(item.estoque_atual).toFixed(4)} ${item.unidade}</td>
+                                <td class="font-monospace fw-bold ${falta ? 'text-danger' : 'text-success'}">${saldo.toFixed(4)} ${item.unidade}</td>
+                                <td>
+                                    ${falta
+                                    ? '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i> Ruptura! Falta material</span>'
+                                    : '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i> Disponível</span>'}
+                                </td>
+                            </tr>
+                        `;
+                        });
+
+                        tbody.innerHTML = html;
+                    })
+                    .catch(() => {
+                        document.getElementById('tabelaBomBody').innerHTML =
+                            '<tr><td colspan="6" class="text-center text-danger py-3">Erro ao processar cálculo da BOM.</td></tr>';
+                    });
+            });
+        });
+    });
+</script>
+
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+
+
+==============================================================================
+📄 [22/27] pages/produtos.php
+    Extensão: .php | Linhas: 382 | Bytes: 20218
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/../includes/auth.php';
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/constants.php';
+$page_title = 'Produtos & Ficha Técnica (BOM)';
+$mensagem_sucesso = '';
+$mensagem_erro = '';
+
+// ========================================================
+// PROCESSAMENTO DE FORMULÁRIOS (POST)
+// ========================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $acao = $_POST['acao'] ?? '';
+
+    // 1. Cadastrar Novo Produto
+    if ($acao === 'salvar_produto') {
+        $codigo = strtoupper(trim($_POST['codigo'] ?? ''));
+        $nome = trim($_POST['nome'] ?? '');
+        $aroma = trim($_POST['aroma'] ?? '');
+        $intensidade = $_POST['intensidade_aroma'] ?? 'moderado';
+        $peso_g = (float) ($_POST['peso_barra_g'] ?? 100);
+        $estoque_min = (int) ($_POST['estoque_minimo'] ?? 50);
+        $preco_venda = (float) str_replace(',', '.', $_POST['preco_venda'] ?? '0');
+
+        if (empty($codigo) || empty($nome) || $preco_venda <= 0) {
+            $mensagem_erro = 'Preencha código, nome e preço de venda válido.';
+        } else {
+            try {
+                $stmt = $pdo->prepare("
+                    INSERT INTO produtos (codigo, nome, aroma, peso_barra_g, intensidade_aroma, estoque_minimo, preco_venda)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ");
+                $stmt->execute([$codigo, $nome, $aroma, $peso_g, $intensidade, $estoque_min, $preco_venda]);
+                $mensagem_sucesso = "Produto {$codigo} cadastrado com sucesso!";
+            } catch (PDOException $e) {
+                $mensagem_erro = ($e->getCode() == 23000) ? 'Código de produto já cadastrado.' : 'Erro: ' . $e->getMessage();
+            }
+        }
+    }
+
+    // 2. Adicionar Insumo na Ficha Técnica (BOM)
+    if ($acao === 'adicionar_insumo_bom') {
+        $produto_id = (int) ($_POST['produto_id'] ?? 0);
+        $insumo_id = (int) ($_POST['insumo_id'] ?? 0);
+        $qtd = (float) str_replace(',', '.', $_POST['qtd_por_barra'] ?? '0');
+
+        if ($produto_id <= 0 || $insumo_id <= 0 || $qtd <= 0) {
+            $mensagem_erro = 'Informe o produto, insumo e quantidade por barra válida.';
+        } else {
+            try {
+                $stmt = $pdo->prepare("
+                    INSERT INTO ficha_tecnica (produto_id, insumo_id, qtd_por_barra)
+                    VALUES (?, ?, ?)
+                    ON DUPLICATE KEY UPDATE qtd_por_barra = VALUES(qtd_por_barra)
+                ");
+                $stmt->execute([$produto_id, $insumo_id, $qtd]);
+                $mensagem_sucesso = 'Ficha Técnica atualizada com sucesso!';
+            } catch (PDOException $e) {
+                $mensagem_erro = 'Erro ao atualizar BOM: ' . $e->getMessage();
+            }
+        }
+    }
+
+    // 3. Remover Insumo da Ficha Técnica
+    if ($acao === 'remover_insumo_bom') {
+        $bom_id = (int) ($_POST['bom_id'] ?? 0);
+        if ($bom_id > 0) {
+            $stmt = $pdo->prepare("DELETE FROM ficha_tecnica WHERE id = ?");
+            $stmt->execute([$bom_id]);
+            $mensagem_sucesso = 'Insumo removido da Ficha Técnica.';
+        }
+    }
+}
+
+// ========================================================
+// CONSULTAS DA PÁGINA
+// ========================================================
+
+// 1. Insumos disponíveis para seleção na BOM
+$insumos_disponiveis = $pdo->query("SELECT id, codigo, nome, unidade, custo_unitario FROM insumos ORDER BY nome ASC")->fetchAll();
+
+// 2. Buscar Produtos e calcular Custo de Insumos por Barra
+$stmt_prods = $pdo->query("
+    SELECT p.*,
+           COALESCE(SUM(ft.qtd_por_barra * i.custo_unitario), 0) AS custo_mp_barra,
+           COUNT(ft.id) AS total_itens_bom
+    FROM produtos p
+    LEFT JOIN ficha_tecnica ft ON p.id = ft.produto_id
+    LEFT JOIN insumos i ON ft.insumo_id = i.id
+    WHERE p.ativo = 1
+    GROUP BY p.id
+    ORDER BY p.id ASC
+");
+$produtos = $stmt_prods->fetchAll();
+
+// 3. Carregar Ficha Técnica detalhada agrupada por produto
+$stmt_bom = $pdo->query("
+    SELECT ft.id AS bom_id, ft.produto_id, ft.qtd_por_barra,
+           i.nome AS insumo_nome, i.codigo AS insumo_codigo, i.unidade, i.custo_unitario,
+           (ft.qtd_por_barra * i.custo_unitario) AS subtotal_custo
+    FROM ficha_tecnica ft
+    JOIN insumos i ON ft.insumo_id = i.id
+    ORDER BY ft.produto_id, i.nome
+");
+$boms_raw = $stmt_bom->fetchAll();
+
+$fichas_tecnicas = [];
+foreach ($boms_raw as $item) {
+    $fichas_tecnicas[$item['produto_id']][] = $item;
+}
+
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-flower1 text-success me-2"></i>Produtos & Estrutura de Materiais (BOM)
+            </h2>
+            <p class="text-muted mb-0">Engenharia do produto: consumo unitário de insumos, custo padrão da barra e
+                margens.</p>
+        </div>
+        <div>
+            <button class="btn btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#modalNovoProduto">
+                <i class="bi bi-plus-circle me-1"></i> Cadastrar Nova Fragrância
+            </button>
+        </div>
+    </div>
+
+    <!-- Alertas Flash -->
+    <?php if (!empty($mensagem_sucesso)): ?>
+        <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert">
+            <i class="bi bi-check-circle-fill me-2"></i> <?= htmlspecialchars($mensagem_sucesso) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+    <?php if (!empty($mensagem_erro)): ?>
+        <div class="alert alert-danger alert-dismissible fade show border-0 shadow-sm" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i> <?= htmlspecialchars($mensagem_erro) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <!-- Lista de Produtos e suas Fichas Técnicas -->
+    <div class="row g-4">
+        <?php foreach ($produtos as $p):
+            $custo_barra = (float) $p['custo_mp_barra'];
+            $preco_venda = (float) $p['preco_venda'];
+            $margem_bruta = $preco_venda - $custo_barra;
+            $margem_perc = $preco_venda > 0 ? round(($margem_bruta / $preco_venda) * 100, 1) : 0;
+            $bom_itens = $fichas_tecnicas[$p['id']] ?? [];
+            ?>
+            <div class="col-12 col-xl-6">
+                <div class="card card-custom bg-white h-100 p-3">
+                    <div class="d-flex justify-content-between align-items-start border-bottom pb-3 mb-3">
+                        <div>
+                            <span class="badge bg-secondary font-monospace"><?= htmlspecialchars($p['codigo']) ?></span>
+                            <span class="badge bg-light text-dark border ms-1">Intensidade:
+                                <?= ucfirst($p['intensidade_aroma']) ?></span>
+                            <h4 class="fw-bold my-1 text-dark"><?= htmlspecialchars($p['nome']) ?></h4>
+                            <div class="text-muted small"><i class="bi bi-droplet me-1"></i>Aroma:
+                                <?= htmlspecialchars($p['aroma']) ?> | Peso: <?= $p['peso_barra_g'] ?>g
+                            </div>
+                        </div>
+                        <div class="text-end">
+                            <span class="fs-4 fw-bold text-success">R$
+                                <?= number_format($preco_venda, 2, ',', '.') ?></span>
+                            <div class="small text-muted">Preço de Venda</div>
+                        </div>
+                    </div>
+
+                    <!-- Indicadores Financeiros da Barra -->
+                    <div class="row text-center g-2 mb-3 bg-light p-2 rounded-3">
+                        <div class="col-4 border-end">
+                            <span class="small text-muted d-block">Custo MP / Barra</span>
+                            <strong class="text-danger">R$ <?= number_format($custo_barra, 2, ',', '.') ?></strong>
+                        </div>
+                        <div class="col-4 border-end">
+                            <span class="small text-muted d-block">Margem Bruta</span>
+                            <strong class="text-success">R$ <?= number_format($margem_bruta, 2, ',', '.') ?></strong>
+                        </div>
+                        <div class="col-4">
+                            <span class="small text-muted d-block">Margem %</span>
+                            <strong class="text-primary"><?= $margem_perc ?>%</strong>
+                        </div>
+                    </div>
+
+                    <!-- Ficha Técnica (BOM) -->
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="fw-bold text-uppercase text-muted mb-0 small">
+                            <i class="bi bi-list-check me-1"></i>Ficha Técnica (Consumo p/ 1 Barra de 100g)
+                        </h6>
+                        <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#modalAddBom"
+                            data-prod-id="<?= $p['id'] ?>" data-prod-nome="<?= htmlspecialchars($p['nome']) ?>">
+                            <i class="bi bi-plus me-1"></i> Insumo
+                        </button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.88rem;">
+                            <thead class="table-light text-muted">
+                                <tr>
+                                    <th>Insumo</th>
+                                    <th>Consumo Unitário</th>
+                                    <th>Custo Unit.</th>
+                                    <th>Custo/Barra</th>
+                                    <th class="text-end">Ação</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($bom_itens)): ?>
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted py-2">Nenhum insumo configurado na Ficha
+                                            Técnica.</td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($bom_itens as $bom): ?>
+                                        <tr>
+                                            <td><strong><?= htmlspecialchars($bom['insumo_nome']) ?></strong></td>
+                                            <td class="font-monospace">
+                                                <?= number_format((float) $bom['qtd_por_barra'], 4, ',', '.') ?>
+                                                <?= $bom['unidade'] ?>
+                                            </td>
+                                            <td class="text-muted">R$
+                                                <?= number_format((float) $bom['custo_unitario'], 2, ',', '.') ?>
+                                            </td>
+                                            <td class="fw-semibold">R$
+                                                <?= number_format((float) $bom['subtotal_custo'], 3, ',', '.') ?>
+                                            </td>
+                                            <td class="text-end">
+                                                <form method="POST" action="produtos.php" class="d-inline"
+                                                    onsubmit="return confirm('Remover este insumo da Ficha Técnica?');">
+                                                    <input type="hidden" name="acao" value="remover_insumo_bom">
+                                                    <input type="hidden" name="bom_id" value="<?= $bom['bom_id'] ?>">
+                                                    <button type="submit" class="btn btn-link text-danger p-0 border-0"
+                                                        title="Excluir">
+                                                        <i class="bi bi-trash"></i>
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: CADASTRAR PRODUTO                                -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalNovoProduto" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="produtos.php" class="modal-content">
+            <input type="hidden" name="acao" value="salvar_produto">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-flower1 text-success me-2"></i>Novo Sabonete em Linha
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Código:</label>
+                        <input type="text" name="codigo" class="form-control" placeholder="Ex: ROM" maxlength="10"
+                            required>
+                    </div>
+                    <div class="col-8">
+                        <label class="form-label fw-semibold">Nome Comercial:</label>
+                        <input type="text" name="nome" class="form-control" placeholder="Sabonete Artesanal Alecrim"
+                            required>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Aroma:</label>
+                        <input type="text" name="aroma" class="form-control" placeholder="Ex: Alecrim Silvestre"
+                            required>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Intensidade do Aroma:</label>
+                        <select name="intensidade_aroma" class="form-select">
+                            <option value="suave">Suave</option>
+                            <option value="moderado" selected>Moderado</option>
+                            <option value="intenso">Intenso</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Peso (g):</label>
+                        <input type="number" step="1" name="peso_barra_g" class="form-control" value="100" required>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Estoque Mínimo:</label>
+                        <input type="number" step="1" name="estoque_minimo" class="form-control" value="50" required>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label fw-semibold">Preço Venda (R$):</label>
+                        <input type="text" name="preco_venda" class="form-control" placeholder="15,00" required>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-success"><i class="bi bi-check2 me-1"></i> Cadastrar
+                    Produto</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- MODAL: ADICIONAR INSUMO NA BOM                           -->
+<!-- ======================================================== -->
+<div class="modal fade" id="modalAddBom" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="produtos.php" class="modal-content">
+            <input type="hidden" name="acao" value="adicionar_insumo_bom">
+            <input type="hidden" name="produto_id" id="modal_bom_produto_id" value="">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="bi bi-plus-circle text-success me-2"></i>Adicionar Insumo à
+                    Ficha Técnica</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">Produto: <strong id="modal_bom_produto_nome"
+                        class="text-dark"></strong></p>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Selecione o Insumo:</label>
+                    <select name="insumo_id" class="form-select" required>
+                        <option value="">Selecione...</option>
+                        <?php foreach ($insumos_disponiveis as $ins): ?>
+                            <option value="<?= $ins['id'] ?>">
+                                <?= htmlspecialchars($ins['nome']) ?> (<?= $ins['unidade'] ?>) - Custo: R$
+                                <?= number_format((float) $ins['custo_unitario'], 2, ',', '.') ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Quantidade p/ 1 barra de 100g:</label>
+                    <input type="number" step="0.0001" min="0.0001" name="qtd_por_barra" class="form-control"
+                        placeholder="Ex: 0.0920 para 92g" required>
+                    <small class="text-muted">Use ponto ou vírgula decimal (ex: 0.0040 para 4ml de essência).</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+                <button type="submit" class="btn btn-success"><i class="bi bi-save me-1"></i> Salvar na BOM</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const modalAddBom = document.getElementById('modalAddBom');
+        if (modalAddBom) {
+            modalAddBom.addEventListener('show.bs.modal', function (event) {
+                const button = event.relatedTarget;
+                const prodId = button.getAttribute('data-prod-id');
+                const prodNome = button.getAttribute('data-prod-nome');
+                document.getElementById('modal_bom_produto_id').value = prodId;
+                document.getElementById('modal_bom_produto_nome').textContent = prodNome;
+            });
+        }
+    });
+</script>
+
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+
+
+==============================================================================
+📄 [23/27] pages/programacao.php
+    Extensão: .php | Linhas: 272 | Bytes: 13510
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/../includes/auth.php';
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/constants.php';
+$page_title = 'Sequenciamento & Matriz de Setup';
+$mensagem_sucesso = '';
+$mensagem_erro = '';
+
+// Mapeamento numérico da intensidade para cálculo de penalidade de setup
+$escala_aroma = [
+    'suave' => 1, // Ex: Lavanda
+    'moderado' => 2, // Ex: Pitanga, Rosas
+    'intenso' => 3  // Ex: Maracujá cítrico
+];
+
+// ---------------------------------------------------------
+// REORDENAÇÃO AUTOMÁTICA OTIMIZADA (Heurística de Menor Setup)
+// ---------------------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['acao'] ?? '') === 'otimizar_sequencia') {
+    // Busca todas as OPs ativas
+    $stmt = $pdo->query("
+        SELECT op.id, p.intensidade_aroma, p.codigo
+        FROM ordens_producao op
+        JOIN produtos p ON op.produto_id = p.id
+        WHERE op.status IN ('planejada', 'em_producao')
+    ");
+    $ops_ativas = $stmt->fetchAll();
+
+    // Ordena da menor intensidade para a maior (Suave -> Moderado -> Intenso)
+    usort($ops_ativas, function ($a, $b) use ($escala_aroma) {
+        $nivelA = $escala_aroma[$a['intensidade_aroma']] ?? 2;
+        $nivelB = $escala_aroma[$b['intensidade_aroma']] ?? 2;
+        if ($nivelA === $nivelB) {
+            return strcmp($a['codigo'], $b['codigo']);
+        }
+        return $nivelA <=> $nivelB;
+    });
+
+    // Atualiza as datas programadas sequencialmente em passos diários
+    $data_base = new DateTime();
+    foreach ($ops_ativas as $item) {
+        $stmt_up = $pdo->prepare("UPDATE ordens_producao SET data_programada = ? WHERE id = ?");
+        $stmt_up->execute([$data_base->format('Y-m-d'), $item['id']]);
+        $data_base->modify('+1 day');
+    }
+
+    $mensagem_sucesso = 'Heurística aplicada com sucesso! Lotes reordenados do aroma suave ao mais intenso para minimizar o tempo de setup.';
+}
+
+// ---------------------------------------------------------
+// CONSULTA DA FILA DE PRODUÇÃO ATUAL
+// ---------------------------------------------------------
+$stmt = $pdo->query("
+    SELECT op.id, op.numero, op.quantidade_planejada, op.data_programada, op.status,
+           p.nome AS produto_nome, p.codigo AS produto_codigo, p.aroma, p.intensidade_aroma
+    FROM ordens_producao op
+    JOIN produtos p ON op.produto_id = p.id
+    WHERE op.status IN ('planejada', 'em_producao')
+    ORDER BY op.data_programada ASC, op.id ASC
+");
+$fila_producao = $stmt->fetchAll();
+
+// ---------------------------------------------------------
+// CÁLCULO DA MATRIZ DE TRANSIÇÃO E RISCOS DE CONTAMINAÇÃO
+// ---------------------------------------------------------
+$sequencia_analisada = [];
+$total_tempo_setup_min = 0;
+$total_riscos_contaminacao = 0;
+$op_anterior = null;
+
+foreach ($fila_producao as $op) {
+    $setup_min = TEMPO_SETUP_PADRAO_MIN; // 20 min padrão
+    $tipo_setup = 'padrao';
+    $alerta_contaminacao = false;
+    $motivo_setup = 'Primeiro lote da linha ou troca convencional.';
+
+    if ($op_anterior !== null) {
+        $nivel_ant = $escala_aroma[$op_anterior['intensidade_aroma']] ?? 2;
+        $nivel_atual = $escala_aroma[$op['intensidade_aroma']] ?? 2;
+
+        if ($op_anterior['produto_codigo'] === $op['produto_codigo']) {
+            // Mesmo aroma: limpeza mínima de batelada
+            $setup_min = 15;
+            $tipo_setup = 'mesmo_produto';
+            $motivo_setup = 'Mesmo produto: raspagem e limpeza de bico apenas.';
+        } elseif ($nivel_ant > $nivel_atual) {
+            // Risco Crítico: Aroma forte antes de um suave (ex: Maracujá -> Lavanda)
+            $setup_min = TEMPO_SETUP_LIMPEZA_PESADA_MIN; // 45 min
+            $tipo_setup = 'limpeza_pesada';
+            $alerta_contaminacao = true;
+            $total_riscos_contaminacao++;
+            $motivo_setup = "Risco de Contaminação Cruzada! Transição de aroma {$op_anterior['intensidade_aroma']} ({$op_anterior['produto_codigo']}) para {$op['intensidade_aroma']} ({$op['produto_codigo']}). Exige sanitização pesada com álcool 70%.";
+        } else {
+            // Transição segura: Suave -> Mais forte
+            $setup_min = 20;
+            $tipo_setup = 'transicao_suave';
+            $motivo_setup = "Transição segura na curva olfativa ({$op_anterior['intensidade_aroma']} -> {$op['intensidade_aroma']}).";
+        }
+    }
+
+    $total_tempo_setup_min += $setup_min;
+
+    $sequencia_analisada[] = [
+        'op' => $op,
+        'setup_min' => $setup_min,
+        'tipo_setup' => $tipo_setup,
+        'alerta_contaminacao' => $alerta_contaminacao,
+        'motivo_setup' => $motivo_setup,
+        'anterior' => $op_anterior
+    ];
+
+    $op_anterior = $op;
+}
+
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <!-- Cabeçalho -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-calendar3 text-success me-2"></i>Sequenciamento de Produção & Matriz de Setup
+            </h2>
+            <p class="text-muted mb-0">Programação da linha artesanal para evitar contaminação cruzada e minimizar tempo
+                ocioso.</p>
+        </div>
+        <div>
+            <form method="POST" action="programacao.php" class="d-inline"
+                onsubmit="return confirm('Deseja reorganizar automaticamente a fila de OPs pelo critério olfativo (Suave -> Intenso)?');">
+                <input type="hidden" name="acao" value="otimizar_sequencia">
+                <button type="submit" class="btn btn-warning shadow-sm fw-semibold text-dark">
+                    <i class="bi bi-magic me-1"></i> Aplicar Heurística de Otimização (PCP)
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Alertas Flash -->
+    <?php if (!empty($mensagem_sucesso)): ?>
+        <div class="alert alert-success alert-dismissible fade show border-0 shadow-sm" role="alert">
+            <i class="bi bi-check-circle-fill me-2"></i> <?= htmlspecialchars($mensagem_sucesso) ?>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    <?php endif; ?>
+
+    <!-- Painel Didático: A Regra de Ouro da Saboaria -->
+    <div class="card card-custom bg-white p-3 mb-4 border-start border-4 border-success">
+        <div class="d-flex align-items-start gap-3">
+            <div class="fs-2 text-success"><i class="bi bi-lightbulb"></i></div>
+            <div>
+                <h6 class="fw-bold text-dark mb-1">Regra de Ouro do PCP em Cosméticos Artesanais</h6>
+                <p class="small text-muted mb-0">
+                    Sempre sequencie a produção dos <strong>aromas suaves para os aromas intensos</strong> (Lavanda
+                    &rarr; Rosas &rarr; Pitanga &rarr; Maracujá).
+                    Se um lote de aroma cítrico ou marcante (ex: Maracujá) for fabricado antes de um floral suave (ex:
+                    Lavanda), o óleo essencial residual impregna os tachos de fusão e as espátulas de inox, exigindo
+                    <strong>45 min de sanitização pesada</strong> para evitar contaminação olfativa cruzada.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cards de Resumo de Setup -->
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-sm-4">
+            <div class="card card-custom bg-white p-3 h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Tempo Total de Setup Projetado</span>
+                <h3 class="fw-bold my-1 text-primary"><?= $total_tempo_setup_min ?> <small
+                        class="fs-6 text-muted">minutos</small></h3>
+                <small class="text-muted">Equivalente a <?= round($total_tempo_setup_min / 60, 1) ?> horas de paradas de
+                    linha</small>
+            </div>
+        </div>
+        <div class="col-12 col-sm-4">
+            <div class="card card-custom bg-white p-3 h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Pontos Críticos de Contaminação</span>
+                <h3 class="fw-bold my-1 <?= $total_riscos_contaminacao > 0 ? 'text-danger' : 'text-success' ?>">
+                    <?= $total_riscos_contaminacao ?> ocorrência(s)
+                </h3>
+                <small
+                    class="text-muted"><?= $total_riscos_contaminacao > 0 ? 'Lotes invertidos detectados' : 'Sequenciamento olfativo ideal' ?></small>
+            </div>
+        </div>
+        <div class="col-12 col-sm-4">
+            <div class="card card-custom bg-white p-3 h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Tamanho da Fila</span>
+                <h3 class="fw-bold my-1 text-dark"><?= count($fila_producao) ?> <small class="fs-6 text-muted">lotes
+                        programados</small></h3>
+                <small class="text-muted">Ordem cronológica da fábrica</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Linha do Tempo Visual do Sequenciamento -->
+    <div class="card card-custom bg-white p-4">
+        <h5 class="fw-bold mb-3 text-dark">
+            <i class="bi bi-diagram-3 me-2 text-secondary"></i>Linha de Sequenciamento e Troca de Lotes
+        </h5>
+
+        <?php if (empty($sequencia_analisada)): ?>
+            <div class="text-center py-5 text-muted">
+                <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                Não há ordens de produção pendentes para sequenciamento.
+            </div>
+        <?php else: ?>
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead class="table-light small text-uppercase">
+                        <tr>
+                            <th style="width: 50px;">Seq.</th>
+                            <th>Data</th>
+                            <th>Ordem (OP)</th>
+                            <th>Fragrância</th>
+                            <th>Intensidade</th>
+                            <th>Lote</th>
+                            <th>Tempo Setup</th>
+                            <th>Diagnóstico PCP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($sequencia_analisada as $idx => $item):
+                            $op = $item['op'];
+                            ?>
+                            <tr class="<?= $item['alerta_contaminacao'] ? 'table-danger' : '' ?>">
+                                <td class="fw-bold text-center"><?= $idx + 1 ?>º</td>
+                                <td><?= date('d/m/Y', strtotime($op['data_programada'])) ?></td>
+                                <td class="fw-bold font-monospace"><?= htmlspecialchars($op['numero']) ?></td>
+                                <td>
+                                    <span
+                                        class="badge bg-light text-dark border me-1"><?= htmlspecialchars($op['produto_codigo']) ?></span>
+                                    <strong><?= htmlspecialchars($op['produto_nome']) ?></strong>
+                                </td>
+                                <td>
+                                    <span
+                                        class="badge bg-<?= $op['intensidade_aroma'] === 'intenso' ? 'danger' : ($op['intensidade_aroma'] === 'moderado' ? 'warning text-dark' : 'info text-dark') ?>">
+                                        <?= ucfirst($op['intensidade_aroma']) ?>
+                                    </span>
+                                </td>
+                                <td class="fw-semibold"><?= $op['quantidade_planejada'] ?> barras</td>
+                                <td>
+                                    <strong class="font-monospace <?= $item['setup_min'] > 20 ? 'text-danger' : 'text-dark' ?>">
+                                        <?= $item['setup_min'] ?> min
+                                    </strong>
+                                </td>
+                                <td>
+                                    <?php if ($item['alerta_contaminacao']): ?>
+                                        <span class="text-danger fw-semibold small d-block">
+                                            <i class="bi bi-exclamation-triangle-fill me-1"></i> <?= $item['motivo_setup'] ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="text-success small d-block">
+                                            <i class="bi bi-check-circle me-1"></i> <?= $item['motivo_setup'] ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+
+
+==============================================================================
+📄 [24/27] pages/relatorios.php
+    Extensão: .php | Linhas: 281 | Bytes: 13997
+==============================================================================
+<?php
+declare(strict_types=1);
+
+// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+require_once __DIR__ . '/../includes/auth.php';
+
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../config/constants.php';
+$page_title = 'Indicadores de Desempenho do PCP';
+
+// ---------------------------------------------------------
+// FILTRO DE PERÍODO (Mês / Ano)
+// ---------------------------------------------------------
+$mes_filtro = (int) ($_GET['mes'] ?? date('n'));
+$ano_filtro = (int) ($_GET['ano'] ?? date('Y'));
+
+// ---------------------------------------------------------
+// 1. APURAÇÃO DOS KPIS GERAIS
+// ---------------------------------------------------------
+$stmt_kpi = $pdo->prepare("
+    SELECT 
+        COUNT(id) AS total_ops,
+        SUM(CASE WHEN status = 'finalizada' THEN 1 ELSE 0 END) AS ops_finalizadas,
+        COALESCE(SUM(quantidade_planejada), 0) AS total_planejado,
+        COALESCE(SUM(quantidade_produzida), 0) AS total_produzido,
+        COALESCE(SUM(quantidade_refugo), 0) AS total_refugo,
+        -- Cálculo de OTIF: Concluída no prazo E quantidade_produzida >= quantidade_planejada
+        SUM(
+            CASE 
+                WHEN status = 'finalizada' 
+                 AND DATE(data_finalizacao) <= data_programada 
+                 AND quantidade_produzida >= quantidade_planejada 
+                THEN 1 
+                ELSE 0 
+            END
+        ) AS ops_otif
+    FROM ordens_producao
+    WHERE MONTH(data_programada) = ? AND YEAR(data_programada) = ?
+");
+$stmt_kpi->execute([$mes_filtro, $ano_filtro]);
+$kpis = $stmt_kpi->fetch();
+
+$total_ops = (int) $kpis['total_ops'];
+$ops_finalizadas = (int) $kpis['ops_finalizadas'];
+$total_planejado = (int) $kpis['total_planejado'];
+$total_produzido = (int) $kpis['total_produzido'];
+$total_refugo = (int) $kpis['total_refugo'];
+$ops_otif = (int) $kpis['ops_otif'];
+$total_processado = $total_produzido + $total_refugo;
+
+// Indicador 1: Aderência ao Plano (%)
+$aderencia_plano = $total_planejado > 0 ? round(($total_produzido / $total_planejado) * 100, 1) : 0;
+
+// Indicador 2: Taxa de Refugo (%)
+$taxa_refugo = $total_processado > 0 ? round(($total_refugo / $total_processado) * 100, 2) : 0;
+
+// Indicador 3: OTIF (%)
+$otif_perc = $ops_finalizadas > 0 ? round(($ops_otif / $ops_finalizadas) * 100, 1) : 0;
+
+// Indicador 4: Taxa de Utilização da Capacidade Instalada (%)
+$ocupacao_capacidade = round(($total_produzido / CAPACIDADE_MENSAL_BARRAS) * 100, 1);
+
+// Custo estimado de refugo (perdas financeiras de MP) baseado em R$ 3,20/barra média
+$custo_estimado_refugo = $total_refugo * 3.20;
+
+// ---------------------------------------------------------
+// 2. DESEMPENHO POR FRAGRÂNCIA (Linha de Produtos)
+// ---------------------------------------------------------
+$stmt_prod = $pdo->prepare("
+    SELECT p.codigo, p.nome, p.aroma,
+           COALESCE(SUM(op.quantidade_planejada), 0) AS plan,
+           COALESCE(SUM(op.quantidade_produzida), 0) AS prod,
+           COALESCE(SUM(op.quantidade_refugo), 0) AS refugo
+    FROM produtos p
+    LEFT JOIN ordens_producao op ON p.id = op.produto_id 
+         AND MONTH(op.data_programada) = ? 
+         AND YEAR(op.data_programada) = ?
+    GROUP BY p.id
+    ORDER BY prod DESC
+");
+$stmt_prod->execute([$mes_filtro, $ano_filtro]);
+$desempenho_produtos = $stmt_prod->fetchAll();
+
+require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../includes/navbar.php';
+?>
+
+<div class="container-fluid px-4 pb-4">
+    <!-- Topo -->
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold mb-1 text-dark">
+                <i class="bi bi-graph-up-arrow text-success me-2"></i>Indicadores & Relatórios de PCP
+            </h2>
+            <p class="text-muted mb-0">Avaliação de eficiência operacional, qualidade e cumprimento de metas da fábrica.
+            </p>
+        </div>
+        <!-- Filtro de Mês/Ano -->
+        <form method="GET" action="relatorios.php" class="d-flex align-items-center gap-2">
+            <select name="mes" class="form-select form-select-sm">
+                <?php for ($m = 1; $m <= 12; $m++): ?>
+                    <option value="<?= $m ?>" <?= $m === $mes_filtro ? 'selected' : '' ?>>
+                        <?= strftime('%B', mktime(0, 0, 0, $m, 1)) ?> (Mês
+                        <?= str_pad((string) $m, 2, '0', STR_PAD_LEFT) ?>)
+                    </option>
+                <?php endfor; ?>
+            </select>
+            <input type="number" name="ano" class="form-control form-control-sm" value="<?= $ano_filtro ?>"
+                style="width: 90px;">
+            <button type="submit" class="btn btn-sm btn-dark"><i class="bi bi-funnel"></i></button>
+        </form>
+    </div>
+
+    <!-- 4 Cartões Principais de Indicadores -->
+    <div class="row g-3 mb-4">
+        <!-- KPI 1: OTIF -->
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">OTIF (No Prazo & Completo)</span>
+                <h3 class="fw-bold my-1 <?= $otif_perc >= 90 ? 'text-success' : 'text-warning' ?>">
+                    <?= $otif_perc ?>%
+                </h3>
+                <small class="text-muted"><?= $ops_otif ?> de <?= $ops_finalizadas ?> OPs finalizadas sem
+                    atraso/corte</small>
+                <div class="progress mt-2" style="height: 5px;">
+                    <div class="progress-bar <?= $otif_perc >= 90 ? 'bg-success' : 'bg-warning' ?>"
+                        style="width: <?= $otif_perc ?>%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI 2: Aderência ao Plano -->
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Aderência ao Plano</span>
+                <h3 class="fw-bold my-1 text-primary"><?= $aderencia_plano ?>%</h3>
+                <small class="text-muted"><?= $total_produzido ?> un produzidas de <?= $total_planejado ?>
+                    planejadas</small>
+                <div class="progress mt-2" style="height: 5px;">
+                    <div class="progress-bar bg-primary" style="width: <?= min(100, $aderencia_plano) ?>%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI 3: Taxa de Refugo -->
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Taxa de Refugo (Scrap)</span>
+                <h3 class="fw-bold my-1 <?= $taxa_refugo <= 3 ? 'text-success' : 'text-danger' ?>">
+                    <?= $taxa_refugo ?>%
+                </h3>
+                <small class="text-muted"><?= $total_refugo ?> barras perdidas (~R$
+                    <?= number_format($custo_estimado_refugo, 2, ',', '.') ?>)</small>
+                <div class="progress mt-2" style="height: 5px;">
+                    <div class="progress-bar <?= $taxa_refugo <= 3 ? 'bg-success' : 'bg-danger' ?>"
+                        style="width: <?= min(100, $taxa_refugo * 10) ?>%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI 4: Utilização da Capacidade -->
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="card card-custom p-3 bg-white h-100">
+                <span class="text-muted small text-uppercase fw-semibold">Uso da Capacidade</span>
+                <h3 class="fw-bold my-1 text-dark"><?= $ocupacao_capacidade ?>%</h3>
+                <small class="text-muted">Meta mensal de <?= number_format(CAPACIDADE_MENSAL_BARRAS, 0, ',', '.') ?>
+                    barras</small>
+                <div class="progress mt-2" style="height: 5px;">
+                    <div class="progress-bar bg-dark" style="width: <?= min(100, $ocupacao_capacidade) ?>%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabela Detalhada por Fragrância -->
+    <div class="card card-custom bg-white p-4 mb-4">
+        <h5 class="fw-bold mb-3 text-dark">
+            <i class="bi bi-bar-chart-steps me-2 text-secondary"></i>Balanço de Produção por Fragrância no Mês
+        </h5>
+
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light small text-uppercase">
+                    <tr>
+                        <th>Cód.</th>
+                        <th>Fragrância</th>
+                        <th>Planejado</th>
+                        <th>Produzido (Aprovado)</th>
+                        <th>Refugo</th>
+                        <th>Aderência</th>
+                        <th>Rendimento (Yield)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($desempenho_produtos as $prod):
+                        $plan = (int) $prod['plan'];
+                        $prod_qtd = (int) $prod['prod'];
+                        $ref = (int) $prod['refugo'];
+                        $proc = $prod_qtd + $ref;
+                        $ader = $plan > 0 ? round(($prod_qtd / $plan) * 100, 1) : 0;
+                        $yield = $proc > 0 ? round(($prod_qtd / $proc) * 100, 1) : 100;
+                        ?>
+                        <tr>
+                            <td><span
+                                    class="badge bg-secondary font-monospace"><?= htmlspecialchars($prod['codigo']) ?></span>
+                            </td>
+                            <td><strong><?= htmlspecialchars($prod['nome']) ?></strong></td>
+                            <td><?= number_format($plan, 0, ',', '.') ?> un</td>
+                            <td class="fw-bold text-success"><?= number_format($prod_qtd, 0, ',', '.') ?> un</td>
+                            <td class="<?= $ref > 0 ? 'text-danger fw-bold' : 'text-muted' ?>">
+                                <?= number_format($ref, 0, ',', '.') ?> un
+                            </td>
+                            <td>
+                                <span
+                                    class="badge bg-<?= $ader >= 100 ? 'success' : ($ader > 0 ? 'warning text-dark' : 'secondary') ?>">
+                                    <?= $ader ?>%
+                                </span>
+                            </td>
+                            <td>
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="progress flex-grow-1" style="height: 6px;">
+                                        <div class="progress-bar bg-success" style="width: <?= $yield ?>%"></div>
+                                    </div>
+                                    <small class="fw-semibold text-muted"><?= $yield ?>%</small>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Bloco de Diagnóstico e Recomendações para a Aula -->
+    <div class="card card-custom bg-white p-4">
+        <h5 class="fw-bold mb-3 text-dark">
+            <i class="bi bi-chat-left-quote me-2 text-primary"></i>Diagnóstico Pedagógico do PCP
+        </h5>
+        <div class="row g-3">
+            <div class="col-12 col-md-4">
+                <div class="p-3 bg-light rounded-3 h-100">
+                    <strong class="d-block text-dark mb-1">Qualidade & Refugo</strong>
+                    <p class="small text-muted mb-0">
+                        <?php if ($taxa_refugo > 3): ?>
+                            A taxa de refugo ultrapassou a tolerância máxima (3%). Verifique a dosagem de lauril e a
+                            temperatura de cura das fôrmas nas OPs do sabonete de Rosas e Maracujá.
+                        <?php else: ?>
+                            O nível de perdas do processo está controlado, mantendo a margem de contribuição dentro do
+                            orçamento previsto.
+                        <?php endif; ?>
+                    </p>
+                </div>
+            </div>
+            <div class="col-12 col-md-4">
+                <div class="p-3 bg-light rounded-3 h-100">
+                    <strong class="d-block text-dark mb-1">Nível de Serviço (OTIF)</strong>
+                    <p class="small text-muted mb-0">
+                        <?php if ($otif_perc < 85): ?>
+                            O índice OTIF está sob pressão. Houve corte ou atraso em OPs devido a rupturas no estoque de
+                            essências concentradas.
+                        <?php else: ?>
+                            Excelente pontualidade nas entregas sem cortes de lote no faturamento.
+                        <?php endif; ?>
+                    </p>
+                </div>
+            </div>
+            <div class="col-12 col-md-4">
+                <div class="p-3 bg-light rounded-3 h-100">
+                    <strong class="d-block text-dark mb-1">Planejamento de Capacidade</strong>
+                    <p class="small text-muted mb-0">
+                        A fábrica atingiu <?= $ocupacao_capacidade ?>% da sua capacidade instalada.
+                        <?= $ocupacao_capacidade < 70 ? 'Há folga de turnos disponível para absorver novos pedidos sazonais.' : 'A linha está próxima do gargalo de cura e embalagem manual.' ?>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php
+require_once __DIR__ . '/../includes/footer.php';
+
+
+==============================================================================
+📄 [25/27] README.md
+    Extensão: .md | Linhas: 31 | Bytes: 1409
+==============================================================================
+# 🌿 Flora Sabão — Simulador Didático de PCP
+
+Simulador web desenvolvido para aulas práticas de **Planejamento e Controle da Produção (PCP)**, **Engenharia de Métodos** e **Gestão de Operações**, baseado no contexto de uma microempresa de cosméticos artesanais sustentáveis.
+
+---
+
+## 🎯 Objetivos de Aprendizagem
+
+- **Explosão de Materiais (MRP I / BOM):** Cálculo de necessidades líquidas lote a lote a partir de fórmulas unitárias.
+- **Risco de Contaminação Cruzada & Matriz de Setup:** Identificação de gargalos na troca de fragrâncias e sequenciamento ótimo (_Aroma Suave &rarr; Aroma Intenso_).
+- **Apontamento de Chão de Fábrica:** Registro de barras boas vs. refugo com baixa automática proporcional de matérias-primas no estoque.
+- **Indicadores de Desempenho (KPIs):** Apuração prática de **OTIF**, **Aderência ao Plano**, **Taxa de Refugo** e **Ocupação da Capacidade**.
+
+---
+
+## 🚀 Como Executar em 3 Passos
+
+### 1. Pré-requisitos
+
+- **PHP 8.0+** com extensão PDO MySQL ativada.
+- **MySQL 5.7+** ou **MariaDB 10.4+**.
+- Servidor local como **XAMPP**, **Laragon**, **WampServer** ou container Docker.
+
+### 2. Configuração do Banco de Dados
+
+1. No phpMyAdmin ou terminal MySQL, crie o banco e importe os dois scripts SQL localizados na pasta `sql/`:
+   ```sql
+   source sql/flora_sabao.sql;
+   source sql/usuarios.sql;
+   ```
+
+
+==============================================================================
+📄 [26/27] sql/flora_sabao.sql
+    Extensão: .sql | Linhas: 366 | Bytes: 9324
+==============================================================================
+-- ========================================================
+-- Simulador PCP — Flora Sabão
+-- Script de Criação e Carga Inicial (Seed)
+-- ========================================================
+CREATE DATABASE IF NOT EXISTS `flora_sabao` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+USE `flora_sabao`;
+
+-- Desativar verificação de chaves para limpeza limpa
+SET
+    FOREIGN_KEY_CHECKS = 0;
+
+DROP TABLE IF EXISTS `mov_estoque`;
+
+DROP TABLE IF EXISTS `ordens_producao`;
+
+DROP TABLE IF EXISTS `ficha_tecnica`;
+
+DROP TABLE IF EXISTS `insumos`;
+
+DROP TABLE IF EXISTS `produtos`;
+
+SET
+    FOREIGN_KEY_CHECKS = 1;
+
+-- --------------------------------------------------------
+-- Tabela: PRODUTOS (Fragrâncias acabadas)
+-- --------------------------------------------------------
+CREATE TABLE `produtos` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `codigo` VARCHAR(10) NOT NULL UNIQUE,
+    `nome` VARCHAR(50) NOT NULL,
+    `aroma` VARCHAR(50) NOT NULL,
+    `peso_barra_g` DECIMAL(6, 2) NOT NULL DEFAULT 100.00,
+    `intensidade_aroma` ENUM('suave', 'moderado', 'intenso') NOT NULL DEFAULT 'moderado',
+    `estoque_atual` INT NOT NULL DEFAULT 0,
+    `estoque_minimo` INT NOT NULL DEFAULT 50,
+    `preco_venda` DECIMAL(10, 2) NOT NULL DEFAULT 14.90,
+    `ativo` TINYINT(1) NOT NULL DEFAULT 1
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- --------------------------------------------------------
+-- Tabela: INSUMOS (Matéria-prima e embalagens)
+-- --------------------------------------------------------
+CREATE TABLE `insumos` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `codigo` VARCHAR(10) NOT NULL UNIQUE,
+    `nome` VARCHAR(80) NOT NULL,
+    `unidade` VARCHAR(10) NOT NULL,
+    -- 'kg', 'L', 'un'
+    `estoque_atual` DECIMAL(10, 4) NOT NULL DEFAULT 0.0000,
+    `estoque_minimo` DECIMAL(10, 4) NOT NULL DEFAULT 0.0000,
+    `custo_unitario` DECIMAL(10, 2) NOT NULL DEFAULT 0.00
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- --------------------------------------------------------
+-- Tabela: FICHA TÉCNICA (Bill of Materials - BOM por barra)
+-- --------------------------------------------------------
+CREATE TABLE `ficha_tecnica` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `produto_id` INT NOT NULL,
+    `insumo_id` INT NOT NULL,
+    `qtd_por_barra` DECIMAL(10, 4) NOT NULL,
+    -- Consumo unitário
+    FOREIGN KEY (`produto_id`) REFERENCES `produtos`(`id`) ON DELETE CASCADE,
+    FOREIGN KEY (`insumo_id`) REFERENCES `insumos`(`id`) ON DELETE RESTRICT,
+    UNIQUE KEY `uk_prod_insumo` (`produto_id`, `insumo_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- --------------------------------------------------------
+-- Tabela: ORDENS DE PRODUÇÃO (OP)
+-- --------------------------------------------------------
+CREATE TABLE `ordens_producao` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `numero` VARCHAR(20) NOT NULL UNIQUE,
+    `produto_id` INT NOT NULL,
+    `quantidade_planejada` INT NOT NULL,
+    `quantidade_produzida` INT NOT NULL DEFAULT 0,
+    `quantidade_refugo` INT NOT NULL DEFAULT 0,
+    `data_programada` DATE NOT NULL,
+    `data_inicio` DATETIME NULL,
+    `data_finalizacao` DATETIME NULL,
+    `status` ENUM(
+        'planejada',
+        'em_producao',
+        'finalizada',
+        'cancelada'
+    ) NOT NULL DEFAULT 'planejada',
+    `observacoes` TEXT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (`produto_id`) REFERENCES `produtos`(`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- --------------------------------------------------------
+-- Tabela: MOVIMENTAÇÃO DE ESTOQUE
+-- --------------------------------------------------------
+CREATE TABLE `mov_estoque` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `tipo` ENUM('entrada', 'saida') NOT NULL,
+    `tipo_item` ENUM('insumo', 'produto') NOT NULL,
+    `insumo_id` INT NULL,
+    `produto_id` INT NULL,
+    `quantidade` DECIMAL(10, 4) NOT NULL,
+    `op_id` INT NULL,
+    `data_mov` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `motivo` VARCHAR(100) NOT NULL,
+    -- 'Produção OP-001', 'Compra NF 123', 'Ajuste inventário'
+    FOREIGN KEY (`insumo_id`) REFERENCES `insumos`(`id`),
+    FOREIGN KEY (`produto_id`) REFERENCES `produtos`(`id`),
+    FOREIGN KEY (`op_id`) REFERENCES `ordens_producao`(`id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- ========================================================
+-- CARGA INICIAL (SEED)
+-- ========================================================
+-- 1. Produtos
+INSERT INTO
+    `produtos` (
+        `id`,
+        `codigo`,
+        `nome`,
+        `aroma`,
+        `peso_barra_g`,
+        `intensidade_aroma`,
+        `estoque_atual`,
+        `estoque_minimo`,
+        `preco_venda`
+    )
+VALUES
+    (
+        1,
+        'PIT',
+        'Sabonete Artesanal Pitanga',
+        'Pitanga Tropical',
+        100.00,
+        'moderado',
+        40,
+        50,
+        15.00
+    ),
+    (
+        2,
+        'LAV',
+        'Sabonete Artesanal Lavanda',
+        'Lavanda Francesa',
+        100.00,
+        'suave',
+        60,
+        50,
+        16.50
+    ),
+    (
+        3,
+        'ROS',
+        'Sabonete Artesanal Rosas',
+        'Rosas Nobres',
+        100.00,
+        'moderado',
+        20,
+        50,
+        16.50
+    ),
+    (
+        4,
+        'MAR',
+        'Sabonete Artesanal Maracujá',
+        'Maracujá Cítrico',
+        100.00,
+        'intenso',
+        15,
+        50,
+        15.00
+    );
+
+-- 2. Insumos (Matérias-Primas e Embalagens)
+INSERT INTO
+    `insumos` (
+        `id`,
+        `codigo`,
+        `nome`,
+        `unidade`,
+        `estoque_atual`,
+        `estoque_minimo`,
+        `custo_unitario`
+    )
+VALUES
+    (
+        1,
+        'BASE-GLIC',
+        'Base Glicerinada Vegetal Branca',
+        'kg',
+        120.0000,
+        30.0000,
+        24.50
+    ),
+    (
+        2,
+        'EXT-ALOE',
+        'Extrato Glicólico de Aloe Vera',
+        'L',
+        5.0000,
+        1.5000,
+        68.00
+    ),
+    (
+        3,
+        'ESS-PIT',
+        'Essência Concentrada Pitanga',
+        'L',
+        2.0000,
+        0.8000,
+        95.00
+    ),
+    (
+        4,
+        'ESS-LAV',
+        'Essência Concentrada Lavanda',
+        'L',
+        1.2000,
+        0.8000,
+        110.00
+    ),
+    (
+        5,
+        'ESS-ROS',
+        'Essência Concentrada Rosas',
+        'L',
+        0.6000,
+        0.8000,
+        125.00
+    ),
+    -- Alerta de estoque baixo para a dinâmica de aula!
+    (
+        6,
+        'ESS-MAR',
+        'Essência Concentrada Maracujá',
+        'L',
+        2.5000,
+        0.8000,
+        92.00
+    ),
+    (
+        7,
+        'LAURIL',
+        'Lauril Éter Sulfato (espumante)',
+        'L',
+        4.0000,
+        1.0000,
+        18.00
+    ),
+    (
+        8,
+        'EMB-KRAFT',
+        'Cinta Papel Kraft Personalizada',
+        'un',
+        800.0000,
+        200.0000,
+        0.45
+    ),
+    (
+        9,
+        'CELOF-BIO',
+        'Película Protetora Biodegradável',
+        'un',
+        850.0000,
+        200.0000,
+        0.20
+    );
+
+-- 3. Ficha Técnica Padrão por Barra (100g)
+-- PITANGA
+INSERT INTO
+    `ficha_tecnica` (`produto_id`, `insumo_id`, `qtd_por_barra`)
+VALUES
+    (1, 1, 0.0920),
+    -- 92g de base
+    (1, 2, 0.0020),
+    -- 2ml extrato
+    (1, 3, 0.0040),
+    -- 4ml essência pitanga
+    (1, 7, 0.0020),
+    -- 2ml lauril
+    (1, 8, 1.0000),
+    -- 1 cinta
+    (1, 9, 1.0000);
+
+-- 1 película
+-- LAVANDA
+INSERT INTO
+    `ficha_tecnica` (`produto_id`, `insumo_id`, `qtd_por_barra`)
+VALUES
+    (2, 1, 0.0920),
+    (2, 2, 0.0020),
+    (2, 4, 0.0040),
+    -- essência lavanda
+    (2, 7, 0.0020),
+    (2, 8, 1.0000),
+    (2, 9, 1.0000);
+
+-- ROSAS
+INSERT INTO
+    `ficha_tecnica` (`produto_id`, `insumo_id`, `qtd_por_barra`)
+VALUES
+    (3, 1, 0.0920),
+    (3, 2, 0.0020),
+    (3, 5, 0.0040),
+    -- essência rosas
+    (3, 7, 0.0020),
+    (3, 8, 1.0000),
+    (3, 9, 1.0000);
+
+-- MARACUJÁ
+INSERT INTO
+    `ficha_tecnica` (`produto_id`, `insumo_id`, `qtd_por_barra`)
+VALUES
+    (4, 1, 0.0920),
+    (4, 2, 0.0020),
+    (4, 6, 0.0040),
+    -- essência maracujá
+    (4, 7, 0.0020),
+    (4, 8, 1.0000),
+    (4, 9, 1.0000);
+
+-- 4. OPs Iniciais para simulação imediata
+INSERT INTO
+    `ordens_producao` (
+        `numero`,
+        `produto_id`,
+        `quantidade_planejada`,
+        `quantidade_produzida`,
+        `quantidade_refugo`,
+        `data_programada`,
+        `status`,
+        `observacoes`
+    )
+VALUES
+    (
+        'OP-2026-001',
+        2,
+        100,
+        100,
+        2,
+        CURDATE() - INTERVAL 2 DAY,
+        'finalizada',
+        'Produção concluída sem desvios graves.'
+    ),
+    (
+        'OP-2026-002',
+        1,
+        150,
+        0,
+        0,
+        CURDATE(),
+        'em_producao',
+        'Em processo de corte e secagem.'
+    ),
+    (
+        'OP-2026-003',
+        3,
+        200,
+        0,
+        0,
+        CURDATE() + INTERVAL 1 DAY,
+        'planejada',
+        'Atenção ao estoque crítico de essência de rosas!'
+    );
+
+
+==============================================================================
+📄 [27/27] sql/usuarios.sql
+    Extensão: .sql | Linhas: 45 | Bytes: 1390
+==============================================================================
+USE `flora_sabao`;
+
+CREATE TABLE IF NOT EXISTS `usuarios` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `nome` VARCHAR(80) NOT NULL,
+    `email` VARCHAR(100) NOT NULL UNIQUE,
+    `senha` VARCHAR(255) NOT NULL,
+    `perfil` ENUM('admin', 'pcp', 'producao', 'almoxarifado') NOT NULL DEFAULT 'pcp',
+    `ativo` TINYINT(1) NOT NULL DEFAULT 1,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
+
+-- Inserção de usuários modelo para a aula (Senha padrão para todos: 123456)
+-- Hash gerado por password_hash('123456', PASSWORD_DEFAULT)
+INSERT INTO
+    `usuarios` (`nome`, `email`, `senha`, `perfil`)
+VALUES
+    (
+        'Coordenador PCP',
+        'pcp@flora.com',
+        '$2y$10$wE/4H1XqJom2wR4uXbC35eL.wWJcglDk81p4Ekn2Pj3lHhA6F3Pau',
+        'pcp'
+    ),
+    (
+        'Líder de Produção',
+        'producao@flora.com',
+        '$2y$10$wE/4H1XqJom2wR4uXbC35eL.wWJcglDk81p4Ekn2Pj3lHhA6F3Pau',
+        'producao'
+    ),
+    (
+        'Almoxarife / Compras',
+        'estoque@flora.com',
+        '$2y$10$wE/4H1XqJom2wR4uXbC35eL.wWJcglDk81p4Ekn2Pj3lHhA6F3Pau',
+        'almoxarifado'
+    ),
+    (
+        'Gerente Geral',
+        'admin@flora.com',
+        '$2y$10$wE/4H1XqJom2wR4uXbC35eL.wWJcglDk81p4Ekn2Pj3lHhA6F3Pau',
+        'admin'
+    ) ON DUPLICATE KEY
+UPDATE
+    `nome` =
+VALUES
+    (`nome`);
+
