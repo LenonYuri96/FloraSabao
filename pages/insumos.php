@@ -1,14 +1,15 @@
 <?php
 declare(strict_types=1);
 
-// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
 require_once __DIR__ . '/../includes/auth.php';
-
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../config/constants.php';
+
 $page_title = 'Cadastro de Insumos & Matérias-Primas';
 $mensagem_sucesso = '';
 $mensagem_erro = '';
+
+$equipe_id = getEquipeAtivaId();
 
 // PROCESSAMENTO DO FORMULÁRIO (POST)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -18,24 +19,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $codigo = strtoupper(trim($_POST['codigo'] ?? ''));
         $nome = trim($_POST['nome'] ?? '');
         $unidade = trim($_POST['unidade'] ?? 'kg');
-        $estoque_min = (float) str_replace(',', '.', $_POST['estoque_minimo'] ?? '0');
-        $custo_unit = (float) str_replace(',', '.', $_POST['custo_unitario'] ?? '0');
+        $estoque_min = (float) str_replace(',', '.', (string)($_POST['estoque_minimo'] ?? '0'));
+        $custo_unit = (float) str_replace(',', '.', (string)($_POST['custo_unitario'] ?? '0'));
 
         if (empty($codigo) || empty($nome) || $custo_unit <= 0) {
             $mensagem_erro = 'Preencha código, nome e custo unitário válido.';
         } else {
             try {
                 $stmt = $pdo->prepare("
-                    INSERT INTO insumos (codigo, nome, unidade, estoque_minimo, custo_unitario)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO insumos (equipe_id, codigo, nome, unidade, estoque_minimo, custo_unitario)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON DUPLICATE KEY UPDATE 
                         nome = VALUES(nome),
                         unidade = VALUES(unidade),
                         estoque_minimo = VALUES(estoque_minimo),
                         custo_unitario = VALUES(custo_unitario)
                 ");
-                $stmt->execute([$codigo, $nome, $unidade, $estoque_min, $custo_unit]);
-                $mensagem_sucesso = "Insumo {$codigo} gravado com sucesso!";
+                $stmt->execute([$equipe_id, $codigo, $nome, $unidade, $estoque_min, $custo_unit]);
+                $mensagem_sucesso = "Insumo {$codigo} gravado com sucesso para a equipe!";
             } catch (PDOException $e) {
                 $mensagem_erro = 'Erro ao salvar insumo: ' . $e->getMessage();
             }
@@ -43,7 +44,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$insumos = $pdo->query("SELECT * FROM insumos ORDER BY nome ASC")->fetchAll();
+$stmt = $pdo->prepare("SELECT * FROM insumos WHERE equipe_id = ? ORDER BY nome ASC");
+$stmt->execute([$equipe_id]);
+$insumos = $stmt->fetchAll();
 
 require_once __DIR__ . '/../includes/header.php';
 require_once __DIR__ . '/../includes/navbar.php';
@@ -55,8 +58,7 @@ require_once __DIR__ . '/../includes/navbar.php';
             <h2 class="fw-bold mb-1 text-dark">
                 <i class="bi bi-droplet-half text-success me-2"></i>Catálogo de Insumos & Custos
             </h2>
-            <p class="text-muted mb-0">Parametrização de custos de compra e estoque de segurança para o cálculo do MRP.
-            </p>
+            <p class="text-muted mb-0">Parametrização de custos de compra e estoque de segurança para o cálculo do MRP.</p>
         </div>
         <div>
             <button class="btn btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#modalInsumo">
@@ -93,25 +95,23 @@ require_once __DIR__ . '/../includes/navbar.php';
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($insumos as $ins):
-                        $total = (float) $ins['estoque_atual'] * (float) $ins['custo_unitario'];
-                        ?>
-                    <tr>
-                        <td><span
-                                class="badge bg-light text-secondary border font-monospace"><?= htmlspecialchars($ins['codigo']) ?></span>
-                        </td>
-                        <td><strong><?= htmlspecialchars($ins['nome']) ?></strong></td>
-                        <td><span class="badge bg-light text-dark border"><?= $ins['unidade'] ?></span></td>
-                        <td class="font-monospace fw-bold">
-                            <?= number_format((float) $ins['estoque_atual'], 4, ',', '.') ?>
-                        </td>
-                        <td class="font-monospace text-muted">
-                            <?= number_format((float) $ins['estoque_minimo'], 4, ',', '.') ?>
-                        </td>
-                        <td>R$ <?= number_format((float) $ins['custo_unitario'], 2, ',', '.') ?></td>
-                        <td class="fw-semibold text-dark">R$ <?= number_format($total, 2, ',', '.') ?></td>
-                    </tr>
-                    <?php endforeach; ?>
+                    <?php if (empty($insumos)): ?>
+                        <tr><td colspan="7" class="text-center py-4 text-muted">Nenhum insumo cadastrado para sua equipe.</td></tr>
+                    <?php else: ?>
+                        <?php foreach ($insumos as $ins):
+                            $total = (float) $ins['estoque_atual'] * (float) $ins['custo_unitario'];
+                            ?>
+                        <tr>
+                            <td><span class="badge bg-light text-secondary border font-monospace"><?= htmlspecialchars($ins['codigo']) ?></span></td>
+                            <td><strong><?= htmlspecialchars($ins['nome']) ?></strong></td>
+                            <td><span class="badge bg-light text-dark border"><?= htmlspecialchars($ins['unidade']) ?></span></td>
+                            <td class="font-monospace fw-bold"><?= number_format((float) $ins['estoque_atual'], 4, ',', '.') ?></td>
+                            <td class="font-monospace text-muted"><?= number_format((float) $ins['estoque_minimo'], 4, ',', '.') ?></td>
+                            <td>R$ <?= number_format((float) $ins['custo_unitario'], 2, ',', '.') ?></td>
+                            <td class="fw-semibold text-dark">R$ <?= number_format($total, 2, ',', '.') ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
                 </tbody>
             </table>
         </div>
@@ -124,8 +124,7 @@ require_once __DIR__ . '/../includes/navbar.php';
         <form method="POST" action="insumos.php" class="modal-content">
             <input type="hidden" name="acao" value="salvar_insumo">
             <div class="modal-header">
-                <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square text-success me-2"></i>Parametrizar Insumo
-                </h5>
+                <h5 class="modal-title fw-bold"><i class="bi bi-pencil-square text-success me-2"></i>Parametrizar Insumo</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -150,8 +149,7 @@ require_once __DIR__ . '/../includes/navbar.php';
                     </div>
                     <div class="col-4">
                         <label class="form-label fw-semibold">Estoque Mínimo:</label>
-                        <input type="number" step="0.0001" name="estoque_minimo" class="form-control"
-                            placeholder="1.0000" required>
+                        <input type="number" step="0.0001" name="estoque_minimo" class="form-control" placeholder="1.0000" required>
                     </div>
                     <div class="col-4">
                         <label class="form-label fw-semibold">Custo Unit. (R$):</label>
@@ -167,5 +165,4 @@ require_once __DIR__ . '/../includes/navbar.php';
     </div>
 </div>
 
-<?php
-require_once __DIR__ . '/../includes/footer.php';
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

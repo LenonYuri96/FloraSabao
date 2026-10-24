@@ -1,17 +1,28 @@
 <?php
 declare(strict_types=1);
 
-// 🔐 GUARDA DE AUTENTICAÇÃO — deve vir PRIMEIRO
+// 🔐 GUARDA DE AUTENTICAÇÃO
 require_once __DIR__ . '/../includes/auth.php';
-
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../config/constants.php';
 
 $page_title = 'Gestão de Estoque e Insumos';
 
-// Mensagens de feedback (Flash Messages)
 $mensagem_sucesso = '';
 $mensagem_erro = '';
+
+$equipe_id = getEquipeAtivaId();
+$rodada_ativa = getRodadaAtiva($pdo);
+
+// Busca dados da equipe ativa
+$stmt_eq = $pdo->prepare("SELECT id, nome, cor_hex, caixa_disponivel FROM equipes WHERE id = ?");
+$stmt_eq->execute([$equipe_id]);
+$equipe_dados = $stmt_eq->fetch() ?: [
+    'id' => $equipe_id,
+    'nome' => 'Equipe ' . $equipe_id,
+    'cor_hex' => '#2d5a3f',
+    'caixa_disponivel' => 15000.00
+];
 
 // ========================================================
 // PROCESSAMENTO DE FORMULÁRIOS (POST)
@@ -22,44 +33,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // 1. Entrada / Saída Manual de Insumo
     if ($acao === 'movimentar_insumo') {
         $insumo_id = (int) ($_POST['insumo_id'] ?? 0);
-        $tipo = $_POST['tipo'] ?? ''; // 'entrada' ou 'saida'
-        $quantidade = (float) str_replace(',', '.', $_POST['quantidade'] ?? '0');
+        $tipo = $_POST['tipo'] ?? '';
+        $quantidade = (float) str_replace(',', '.', (string)($_POST['quantidade'] ?? '0'));
         $motivo = trim($_POST['motivo'] ?? '');
 
         if ($insumo_id <= 0 || !in_array($tipo, ['entrada', 'saida'], true) || $quantidade <= 0) {
-            $mensagem_erro = 'Informe um insumo válido, a operação e uma quantidade maior que zero.';
+            $mensagem_erro = 'Informe o insumo, o tipo de operação e uma quantidade maior que zero.';
         } elseif (empty($motivo)) {
-            $mensagem_erro = 'O campo motivo/justificativa é obrigatório para fins de rastreabilidade no PCP.';
+            $mensagem_erro = 'A justificativa/motivo é obrigatória para rastreabilidade no PCP.';
         } else {
             try {
                 $pdo->beginTransaction();
 
-                // Busca insumo atual
-                $stmt = $pdo->prepare("SELECT nome, estoque_atual, unidade FROM insumos WHERE id = ? FOR UPDATE");
-                $stmt->execute([$insumo_id]);
+                $stmt = $pdo->prepare("SELECT nome, estoque_atual, unidade, custo_unitario FROM insumos WHERE id = ? AND equipe_id = ? FOR UPDATE");
+                $stmt->execute([$insumo_id, $equipe_id]);
                 $insumo = $stmt->fetch();
 
                 if (!$insumo) {
-                    throw new Exception('Insumo não localizado.');
+                    throw new Exception('Insumo não localizado para a sua equipe.');
                 }
 
                 if ($tipo === 'saida' && $quantidade > (float) $insumo['estoque_atual']) {
-                    throw new Exception("Saldo insuficiente no estoque para saída. Saldo atual: {$insumo['estoque_atual']} {$insumo['unidade']}.");
+                    throw new Exception("Saldo insuficiente no estoque para saída. Saldo atual: " . number_format((float)$insumo['estoque_atual'], 4, ',', '.') . " {$insumo['unidade']}.");
                 }
 
-                // Atualiza estoque do insumo
-                $sql_update = $tipo === 'entrada'
-                    ? "UPDATE insumos SET estoque_atual = estoque_atual + ? WHERE id = ?"
-                    : "UPDATE insumos SET estoque_atual = estoque_atual - ? WHERE id = ?";
+                $sql_update = ($tipo === 'entrada')
+                    ? "UPDATE insumos SET estoque_atual = estoque_atual + ? WHERE id = ? AND equipe_id = ?"
+                    : "UPDATE insumos SET estoque_atual = estoque_atual - ? WHERE id = ? AND equipe_id = ?";
                 $stmt_up = $pdo->prepare($sql_update);
-                $stmt_up->execute([$quantidade, $insumo_id]);
+                $stmt_up->execute([$quantidade, $insumo_id, $equipe_id]);
 
-                // Registra na tabela mov_estoque
                 $stmt_mov = $pdo->prepare("
-                    INSERT INTO mov_estoque (tipo, tipo_item, insumo_id, quantidade, motivo) 
-                    VALUES (?, 'insumo', ?, ?, ?)
+                    INSERT INTO mov_estoque (equipe_id, tipo, tipo_item, insumo_id, quantidade, motivo) 
+                    VALUES (?, ?, 'insumo', ?, ?, ?)
                 ");
-                $stmt_mov->execute([$tipo, $insumo_id, $quantidade, $motivo]);
+                $stmt_mov->execute([$equipe_id, $tipo, $insumo_id, $quantidade, $motivo]);
 
                 $pdo->commit();
                 $mensagem_sucesso = "Movimentação registrada com sucesso para o insumo \"{$insumo['nome']}\"!";
@@ -87,29 +95,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $pdo->beginTransaction();
 
-                $stmt = $pdo->prepare("SELECT nome, estoque_atual FROM produtos WHERE id = ? FOR UPDATE");
-                $stmt->execute([$produto_id]);
+                $stmt = $pdo->prepare("SELECT nome, estoque_atual FROM produtos WHERE id = ? AND equipe_id = ? FOR UPDATE");
+                $stmt->execute([$produto_id, $equipe_id]);
                 $produto = $stmt->fetch();
 
                 if (!$produto) {
-                    throw new Exception('Produto não encontrado.');
+                    throw new Exception('Produto não encontrado para a sua equipe.');
                 }
 
                 if ($tipo === 'saida' && $quantidade > (int) $produto['estoque_atual']) {
                     throw new Exception("Saldo insuficiente de barras acabadas. Saldo atual: {$produto['estoque_atual']} un.");
                 }
 
-                $sql_update = $tipo === 'entrada'
-                    ? "UPDATE produtos SET estoque_atual = estoque_atual + ? WHERE id = ?"
-                    : "UPDATE produtos SET estoque_atual = estoque_atual - ? WHERE id = ?";
+                $sql_update = ($tipo === 'entrada')
+                    ? "UPDATE produtos SET estoque_atual = estoque_atual + ? WHERE id = ? AND equipe_id = ?"
+                    : "UPDATE produtos SET estoque_atual = estoque_atual - ? WHERE id = ? AND equipe_id = ?";
                 $stmt_up = $pdo->prepare($sql_update);
-                $stmt_up->execute([$quantidade, $produto_id]);
+                $stmt_up->execute([$quantidade, $produto_id, $equipe_id]);
 
                 $stmt_mov = $pdo->prepare("
-                    INSERT INTO mov_estoque (tipo, tipo_item, produto_id, quantidade, motivo) 
-                    VALUES (?, 'produto', ?, ?, ?)
+                    INSERT INTO mov_estoque (equipe_id, tipo, tipo_item, produto_id, quantidade, motivo) 
+                    VALUES (?, ?, 'produto', ?, ?, ?)
                 ");
-                $stmt_mov->execute([$tipo, $produto_id, $quantidade, $motivo]);
+                $stmt_mov->execute([$equipe_id, $tipo, $produto_id, $quantidade, $motivo]);
 
                 $pdo->commit();
                 $mensagem_sucesso = "Ajuste de estoque concluído para \"{$produto['nome']}\"!";
@@ -126,9 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ========================================================
 // CONSULTAS PARA CARGA DA PÁGINA
 // ========================================================
-
-// 1. Insumos com cálculo de valor financeiro imobilizado
-$stmt_insumos = $pdo->query("
+$stmt_insumos = $pdo->prepare("
     SELECT id, codigo, nome, unidade, estoque_atual, estoque_minimo, custo_unitario,
            (estoque_atual * custo_unitario) AS valor_total,
            CASE 
@@ -137,15 +143,14 @@ $stmt_insumos = $pdo->query("
                ELSE 'NORMAL'
            END AS status_nivel
     FROM insumos
+    WHERE equipe_id = ?
     ORDER BY (estoque_atual / NULLIF(estoque_minimo, 0)) ASC, nome ASC
 ");
+$stmt_insumos->execute([$equipe_id]);
 $insumos = $stmt_insumos->fetchAll();
-
-// Total financeiro em insumos
 $total_capital_insumos = array_sum(array_column($insumos, 'valor_total'));
 
-// 2. Produtos acabados
-$stmt_produtos = $pdo->query("
+$stmt_produtos = $pdo->prepare("
     SELECT id, codigo, nome, aroma, intensidade_aroma, estoque_atual, estoque_minimo, preco_venda,
            (estoque_atual * preco_venda) AS valor_potencial,
            CASE 
@@ -153,13 +158,14 @@ $stmt_produtos = $pdo->query("
                ELSE 'NORMAL'
            END AS status_nivel
     FROM produtos
+    WHERE equipe_id = ?
     ORDER BY codigo ASC
 ");
+$stmt_produtos->execute([$equipe_id]);
 $produtos = $stmt_produtos->fetchAll();
 $total_barras_acabadas = array_sum(array_column($produtos, 'estoque_atual'));
 
-// 3. Últimas 15 Movimentações no Estoque (Auditoria)
-$stmt_movs = $pdo->query("
+$stmt_movs = $pdo->prepare("
     SELECT m.id, m.tipo, m.tipo_item, m.quantidade, m.data_mov, m.motivo,
            i.nome AS insumo_nome, i.unidade AS insumo_unidade,
            p.nome AS produto_nome,
@@ -168,9 +174,11 @@ $stmt_movs = $pdo->query("
     LEFT JOIN insumos i ON m.insumo_id = i.id
     LEFT JOIN produtos p ON m.produto_id = p.id
     LEFT JOIN ordens_producao op ON m.op_id = op.id
+    WHERE m.equipe_id = ?
     ORDER BY m.data_mov DESC, m.id DESC
-    LIMIT 20
+    LIMIT 30
 ");
+$stmt_movs->execute([$equipe_id]);
 $movimentacoes = $stmt_movs->fetchAll();
 
 require_once __DIR__ . '/../includes/header.php';
@@ -181,18 +189,24 @@ require_once __DIR__ . '/../includes/navbar.php';
     <!-- Cabeçalho -->
     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
         <div>
+            <div class="d-flex align-items-center gap-2 mb-1">
+                <span class="badge text-white px-3 py-1 font-monospace" style="background-color: <?= htmlspecialchars($equipe_dados['cor_hex']) ?>;">
+                    <i class="bi bi-shield-shaded me-1"></i><?= htmlspecialchars($equipe_dados['nome']) ?>
+                </span>
+                <span class="badge bg-secondary-subtle text-secondary border px-2 py-1">
+                    <?= htmlspecialchars($rodada_ativa['mes_ano'] ?? 'Mês 01') ?>
+                </span>
+            </div>
             <h2 class="fw-bold mb-1 text-dark">
                 <i class="bi bi-boxes text-success me-2"></i>Controle de Estoque & Matéria-Prima
             </h2>
-            <p class="text-muted mb-0">Gestão de ponto de reposição, valor imobilizado e rastreamento de entradas e
-                saídas.</p>
+            <p class="text-muted mb-0">Gestão de ponto de reposição, valor imobilizado e rastreamento de entradas e saídas.</p>
         </div>
-        <div class="d-flex gap-2">
-            <button class="btn btn-outline-success shadow-sm" data-bs-toggle="modal"
-                data-bs-target="#modalAjusteProduto">
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-success shadow-sm fw-semibold" data-bs-toggle="modal" data-bs-target="#modalAjusteProduto">
                 <i class="bi bi-box-arrow-in-down me-1"></i> Ajustar Barra Acabada
             </button>
-            <button class="btn btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#modalMovInsumo">
+            <button class="btn btn-success shadow-sm fw-semibold" data-bs-toggle="modal" data-bs-target="#modalMovInsumo">
                 <i class="bi bi-plus-circle me-1"></i> Entrada / Saída de Insumo
             </button>
         </div>
@@ -216,22 +230,21 @@ require_once __DIR__ . '/../includes/navbar.php';
     <!-- Resumo dos Indicadores de Estoque -->
     <div class="row g-3 mb-4">
         <div class="col-12 col-sm-6 col-lg-3">
-            <div class="card card-custom p-3 bg-white h-100">
+            <div class="card card-custom p-3 bg-white h-100 shadow-sm">
                 <span class="text-muted small text-uppercase fw-semibold">Capital em Matéria-Prima</span>
                 <h4 class="fw-bold my-1 text-dark">R$ <?= number_format($total_capital_insumos, 2, ',', '.') ?></h4>
-                <small class="text-muted"><?= count($insumos) ?> matérias-primas e embalagens</small>
+                <small class="text-muted"><?= count($insumos) ?> insumos e embalagens</small>
             </div>
         </div>
         <div class="col-12 col-sm-6 col-lg-3">
-            <div class="card card-custom p-3 bg-white h-100">
+            <div class="card card-custom p-3 bg-white h-100 shadow-sm">
                 <span class="text-muted small text-uppercase fw-semibold">Barras Acabadas no Estoque</span>
-                <h4 class="fw-bold my-1 text-primary"><?= number_format($total_barras_acabadas, 0, ',', '.') ?> <small
-                        class="fs-6 text-muted">un</small></h4>
+                <h4 class="fw-bold my-1 text-primary"><?= number_format($total_barras_acabadas, 0, ',', '.') ?> <small class="fs-6 text-muted">un</small></h4>
                 <small class="text-muted">Distribuídas em 4 fragrâncias</small>
             </div>
         </div>
         <div class="col-12 col-sm-6 col-lg-3">
-            <div class="card card-custom p-3 bg-white h-100">
+            <div class="card card-custom p-3 bg-white h-100 shadow-sm">
                 <span class="text-muted small text-uppercase fw-semibold">Insumos em Alerta/Crítico</span>
                 <?php
                 $cont_alerta = count(array_filter($insumos, fn($i) => $i['status_nivel'] !== 'NORMAL'));
@@ -243,33 +256,30 @@ require_once __DIR__ . '/../includes/navbar.php';
             </div>
         </div>
         <div class="col-12 col-sm-6 col-lg-3">
-            <div class="card card-custom p-3 bg-white h-100">
-                <span class="text-muted small text-uppercase fw-semibold">Política de Reposição</span>
-                <h5 class="fw-bold my-1 text-dark">Lote Mínimo PCP</h5>
-                <small class="text-muted">Giro quinzenal planejado</small>
+            <div class="card card-custom p-3 bg-white h-100 shadow-sm">
+                <span class="text-muted small text-uppercase fw-semibold">Caixa Disponível</span>
+                <h4 class="fw-bold my-1 text-success">R$ <?= number_format((float)$equipe_dados['caixa_disponivel'], 2, ',', '.') ?></h4>
+                <small class="text-muted">Recurso para novas compras</small>
             </div>
         </div>
     </div>
 
     <!-- Navegação por Abas (Tabs) -->
-    <div class="card card-custom bg-white">
+    <div class="card card-custom bg-white shadow-sm">
         <div class="card-header bg-white border-bottom-0 pt-3 px-4">
             <ul class="nav nav-pills card-header-pills" id="estoqueTab" role="tablist">
                 <li class="nav-item">
-                    <button class="nav-link active fw-semibold" id="insumos-tab" data-bs-toggle="tab"
-                        data-bs-target="#insumos-pane" type="button" role="tab">
+                    <button class="nav-link active fw-semibold" id="insumos-tab" data-bs-toggle="tab" data-bs-target="#insumos-pane" type="button" role="tab">
                         <i class="bi bi-droplet-half me-1"></i> Matérias-Primas & Insumos (BOM)
                     </button>
                 </li>
                 <li class="nav-item">
-                    <button class="nav-link fw-semibold" id="produtos-tab" data-bs-toggle="tab"
-                        data-bs-target="#produtos-pane" type="button" role="tab">
+                    <button class="nav-link fw-semibold" id="produtos-tab" data-bs-toggle="tab" data-bs-target="#produtos-pane" type="button" role="tab">
                         <i class="bi bi-box2 me-1"></i> Produtos Acabados
                     </button>
                 </li>
                 <li class="nav-item">
-                    <button class="nav-link fw-semibold" id="movs-tab" data-bs-toggle="tab" data-bs-target="#movs-pane"
-                        type="button" role="tab">
+                    <button class="nav-link fw-semibold" id="movs-tab" data-bs-toggle="tab" data-bs-target="#movs-pane" type="button" role="tab">
                         <i class="bi bi-journal-text me-1"></i> Histórico / Kardex
                     </button>
                 </li>
@@ -282,9 +292,8 @@ require_once __DIR__ . '/../includes/navbar.php';
                 <!-- ABA 1: MATÉRIAS-PRIMAS -->
                 <div class="tab-pane fade show active" id="insumos-pane" role="tabpanel">
                     <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h6 class="fw-bold mb-0 text-muted text-uppercase">Posição Geral de Insumos</h6>
-                        <span class="text-muted small">Valores decimais com 4 casas (pesagem e fracionamento de
-                            precisão)</span>
+                        <h6 class="fw-bold mb-0 text-muted text-uppercase">Posição Geral de Insumos da Equipe</h6>
+                        <span class="text-muted small">Valores decimais com 4 casas (fracionamento de precisão)</span>
                     </div>
 
                     <div class="table-responsive">
@@ -301,49 +310,47 @@ require_once __DIR__ . '/../includes/navbar.php';
                                 </tr>
                             </thead>
                             <tbody>
+                                <?php if (empty($insumos)): ?>
+                                <tr>
+                                    <td colspan="7" class="text-center py-4 text-muted">Nenhum insumo cadastrado para esta equipe.</td>
+                                </tr>
+                                <?php else: ?>
                                 <?php foreach ($insumos as $ins):
                                     $atual = (float) $ins['estoque_atual'];
                                     $min = (float) $ins['estoque_minimo'];
-                                    $perc_seguranca = $min > 0 ? min(100, round(($atual / $min) * 100)) : 100;
                                     ?>
                                 <tr>
-                                    <td><span
-                                            class="badge bg-light text-secondary border font-monospace"><?= htmlspecialchars($ins['codigo']) ?></span>
-                                    </td>
+                                    <td><span class="badge bg-light text-secondary border font-monospace"><?= htmlspecialchars($ins['codigo']) ?></span></td>
                                     <td><strong><?= htmlspecialchars($ins['nome']) ?></strong></td>
                                     <td>
-                                        <span
-                                            class="fs-6 fw-bold <?= $ins['status_nivel'] !== 'NORMAL' ? 'text-danger' : 'text-dark' ?>">
+                                        <span class="fs-6 fw-bold <?= $ins['status_nivel'] !== 'NORMAL' ? 'text-danger' : 'text-dark' ?>">
                                             <?= number_format($atual, 4, ',', '.') ?>
                                         </span>
-                                        <small class="text-muted"><?= $ins['unidade'] ?></small>
+                                        <small class="text-muted"><?= htmlspecialchars($ins['unidade']) ?></small>
                                     </td>
                                     <td>
-                                        <?= number_format($min, 4, ',', '.') ?> <small
-                                            class="text-muted"><?= $ins['unidade'] ?></small>
+                                        <?= number_format($min, 4, ',', '.') ?> <small class="text-muted"><?= htmlspecialchars($ins['unidade']) ?></small>
                                     </td>
                                     <td>R$ <?= number_format((float) $ins['custo_unitario'], 2, ',', '.') ?></td>
-                                    <td class="fw-semibold text-dark">R$
-                                        <?= number_format((float) $ins['valor_total'], 2, ',', '.') ?>
-                                    </td>
+                                    <td class="fw-semibold text-dark">R$ <?= number_format((float) $ins['valor_total'], 2, ',', '.') ?></td>
                                     <td>
                                         <?php if ($ins['status_nivel'] === 'CRITICO'): ?>
-                                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
-                                            <i class="bi bi-x-octagon me-1"></i> Crítico (< 50% do mín) </span>
-                                                <?php elseif ($ins['status_nivel'] === 'ALERTA'): ?>
-                                                <span
-                                                    class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
-                                                    <i class="bi bi-exclamation-triangle me-1"></i> Ponto de Reposição
-                                                </span>
-                                                <?php else: ?>
-                                                <span
-                                                    class="badge bg-success-subtle text-success border border-success-subtle">
-                                                    <i class="bi bi-check2-circle me-1"></i> Seguro
-                                                </span>
-                                                <?php endif; ?>
+                                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                                                <i class="bi bi-x-octagon me-1"></i> Crítico (&lt; 50% do mín)
+                                            </span>
+                                        <?php elseif ($ins['status_nivel'] === 'ALERTA'): ?>
+                                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                                                <i class="bi bi-exclamation-triangle me-1"></i> Ponto de Reposição
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                                <i class="bi bi-check2-circle me-1"></i> Seguro
+                                            </span>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -366,46 +373,47 @@ require_once __DIR__ . '/../includes/navbar.php';
                                 </tr>
                             </thead>
                             <tbody>
+                                <?php if (empty($produtos)): ?>
+                                <tr>
+                                    <td colspan="8" class="text-center py-4 text-muted">Nenhum produto cadastrado para esta equipe.</td>
+                                </tr>
+                                <?php else: ?>
                                 <?php foreach ($produtos as $prod):
-                                    $alerta = $prod['estoque_atual'] <= $prod['estoque_minimo'];
+                                    $alerta = ((int)$prod['estoque_atual'] <= (int)$prod['estoque_minimo']);
                                     ?>
                                 <tr>
-                                    <td><span
-                                            class="badge bg-secondary font-monospace"><?= htmlspecialchars($prod['codigo']) ?></span>
-                                    </td>
+                                    <td><span class="badge bg-secondary font-monospace"><?= htmlspecialchars($prod['codigo']) ?></span></td>
                                     <td>
                                         <strong><?= htmlspecialchars($prod['nome']) ?></strong>
                                         <div class="small text-muted"><?= htmlspecialchars($prod['aroma']) ?></div>
                                     </td>
                                     <td>
                                         <span class="badge bg-light text-dark border">
-                                            <?= ucfirst($prod['intensidade_aroma']) ?>
+                                            <?= ucfirst(htmlspecialchars($prod['intensidade_aroma'])) ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="fs-5 fw-bold <?= $alerta ? 'text-danger' : 'text-success' ?>">
-                                            <?= $prod['estoque_atual'] ?>
+                                            <?= (int)$prod['estoque_atual'] ?>
                                         </span> <small class="text-muted">barras (100g)</small>
                                     </td>
-                                    <td><?= $prod['estoque_minimo'] ?> barras</td>
+                                    <td><?= (int)$prod['estoque_minimo'] ?> barras</td>
                                     <td>R$ <?= number_format((float) $prod['preco_venda'], 2, ',', '.') ?></td>
-                                    <td class="fw-semibold">R$
-                                        <?= number_format((float) $prod['valor_potencial'], 2, ',', '.') ?>
-                                    </td>
+                                    <td class="fw-semibold">R$ <?= number_format((float) $prod['valor_potencial'], 2, ',', '.') ?></td>
                                     <td>
                                         <?php if ($alerta): ?>
-                                        <span
-                                            class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
-                                            Requer Produção
-                                        </span>
+                                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                                                Requer Produção
+                                            </span>
                                         <?php else: ?>
-                                        <span class="badge bg-success-subtle text-success border border-success-subtle">
-                                            Atende Demanda
-                                        </span>
+                                            <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                                Atende Demanda
+                                            </span>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -427,38 +435,32 @@ require_once __DIR__ . '/../includes/navbar.php';
                             <tbody>
                                 <?php if (empty($movimentacoes)): ?>
                                 <tr>
-                                    <td colspan="5" class="text-center py-4 text-muted">Nenhuma movimentação registrada
-                                        até o momento.</td>
+                                    <td colspan="5" class="text-center py-4 text-muted">Nenhuma movimentação registrada no Kardex desta equipe.</td>
                                 </tr>
                                 <?php else: ?>
                                 <?php foreach ($movimentacoes as $mov):
-                                        $is_entrada = $mov['tipo'] === 'entrada';
-                                        $item_nome = $mov['tipo_item'] === 'insumo'
-                                            ? htmlspecialchars($mov['insumo_nome']) . " ({$mov['insumo_unidade']})"
-                                            : htmlspecialchars($mov['produto_nome']) . " (barras)";
-                                        ?>
+                                    $is_entrada = ($mov['tipo'] === 'entrada');
+                                    $item_nome = ($mov['tipo_item'] === 'insumo')
+                                        ? htmlspecialchars($mov['insumo_nome'] ?? 'Insumo') . " (" . htmlspecialchars($mov['insumo_unidade'] ?? '') . ")"
+                                        : htmlspecialchars($mov['produto_nome'] ?? 'Produto') . " (barras)";
+                                    ?>
                                 <tr>
-                                    <td class="small text-muted"><?= date('d/m/Y H:i', strtotime($mov['data_mov'])) ?>
-                                    </td>
+                                    <td class="small text-muted"><?= date('d/m/Y H:i', strtotime($mov['data_mov'])) ?></td>
                                     <td>
-                                        <span
-                                            class="badge bg-<?= $is_entrada ? 'success-subtle text-success border border-success-subtle' : 'danger-subtle text-danger border border-danger-subtle' ?>">
-                                            <i
-                                                class="bi bi-arrow-<?= $is_entrada ? 'down-left' : 'up-right' ?> me-1"></i>
-                                            <?= strtoupper($mov['tipo']) ?>
+                                        <span class="badge bg-<?= $is_entrada ? 'success-subtle text-success border border-success-subtle' : 'danger-subtle text-danger border border-danger-subtle' ?>">
+                                            <i class="bi bi-arrow-<?= $is_entrada ? 'down-left' : 'up-right' ?> me-1"></i>
+                                            <?= strtoupper(htmlspecialchars($mov['tipo'])) ?>
                                         </span>
                                     </td>
                                     <td><strong><?= $item_nome ?></strong></td>
-                                    <td
-                                        class="font-monospace fw-bold <?= $is_entrada ? 'text-success' : 'text-danger' ?>">
+                                    <td class="font-monospace fw-bold <?= $is_entrada ? 'text-success' : 'text-danger' ?>">
                                         <?= $is_entrada ? '+' : '-' ?>
                                         <?= number_format((float) $mov['quantidade'], 4, ',', '.') ?>
                                     </td>
                                     <td>
                                         <?= htmlspecialchars($mov['motivo']) ?>
                                         <?php if (!empty($mov['op_numero'])): ?>
-                                        <span
-                                            class="badge bg-light text-dark border ms-1"><?= htmlspecialchars($mov['op_numero']) ?></span>
+                                            <span class="badge bg-light text-dark border ms-1"><?= htmlspecialchars($mov['op_numero']) ?></span>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
@@ -482,19 +484,19 @@ require_once __DIR__ . '/../includes/navbar.php';
         <form method="POST" action="estoque.php" class="modal-content">
             <input type="hidden" name="acao" value="movimentar_insumo">
             <div class="modal-header">
-                <h5 class="modal-title fw-bold"><i class="bi bi-droplet-half text-success me-2"></i>Movimentar Insumo /
-                    Matéria-Prima</h5>
+                <h5 class="modal-title fw-bold">
+                    <i class="bi bi-droplet-half text-success me-2"></i>Movimentar Insumo / Matéria-Prima
+                </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Insumo:</label>
                     <select name="insumo_id" class="form-select" required>
-                        <option value="">Selecione...</option>
+                        <option value="">Selecione o insumo...</option>
                         <?php foreach ($insumos as $ins): ?>
-                        <option value="<?= $ins['id'] ?>">
-                            <?= htmlspecialchars($ins['nome']) ?> (Atual:
-                            <?= number_format((float) $ins['estoque_atual'], 4, ',', '.') ?> <?= $ins['unidade'] ?>)
+                        <option value="<?= (int)$ins['id'] ?>">
+                            <?= htmlspecialchars($ins['nome']) ?> (Atual: <?= number_format((float) $ins['estoque_atual'], 4, ',', '.') ?> <?= htmlspecialchars($ins['unidade']) ?>)
                         </option>
                         <?php endforeach; ?>
                     </select>
@@ -510,21 +512,20 @@ require_once __DIR__ . '/../includes/navbar.php';
                     </div>
                     <div class="col-6">
                         <label class="form-label fw-semibold">Quantidade:</label>
-                        <input type="number" step="0.0001" min="0.0001" name="quantidade" class="form-control"
-                            placeholder="0.0000" required>
+                        <input type="number" step="0.0001" min="0.0001" name="quantidade" class="form-control" placeholder="0.0000" required>
                     </div>
                 </div>
 
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Motivo / Documento:</label>
-                    <input type="text" name="motivo" class="form-control"
-                        placeholder="Ex: NF 4029 - Fornecedor Glicerina / Descarte validade" required>
+                    <input type="text" name="motivo" class="form-control" placeholder="Ex: NF 4029 - Reposição de Base / Ajuste de inventário" required>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                <button type="submit" class="btn btn-success"><i class="bi bi-check2 me-1"></i> Confirmar
-                    Lançamento</button>
+                <button type="submit" class="btn btn-success fw-semibold">
+                    <i class="bi bi-check2 me-1"></i> Confirmar Lançamento
+                </button>
             </div>
         </form>
     </div>
@@ -538,7 +539,8 @@ require_once __DIR__ . '/../includes/navbar.php';
         <form method="POST" action="estoque.php" class="modal-content">
             <input type="hidden" name="acao" value="movimentar_produto">
             <div class="modal-header">
-                <h5 class="modal-title fw-bold"><i class="bi bi-box2 text-primary me-2"></i>Ajustar Estoque de Barras
+                <h5 class="modal-title fw-bold">
+                    <i class="bi bi-box2 text-primary me-2"></i>Ajustar Estoque de Barras
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
@@ -546,11 +548,10 @@ require_once __DIR__ . '/../includes/navbar.php';
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Fragrância:</label>
                     <select name="produto_id" class="form-select" required>
-                        <option value="">Selecione...</option>
+                        <option value="">Selecione a fragrância...</option>
                         <?php foreach ($produtos as $p): ?>
-                        <option value="<?= $p['id'] ?>">
-                            [<?= $p['codigo'] ?>] <?= htmlspecialchars($p['nome']) ?> (Atual: <?= $p['estoque_atual'] ?>
-                            un)
+                        <option value="<?= (int)$p['id'] ?>">
+                            [<?= htmlspecialchars($p['codigo']) ?>] <?= htmlspecialchars($p['nome']) ?> (Atual: <?= (int)$p['estoque_atual'] ?> un)
                         </option>
                         <?php endforeach; ?>
                     </select>
@@ -566,20 +567,20 @@ require_once __DIR__ . '/../includes/navbar.php';
                     </div>
                     <div class="col-6">
                         <label class="form-label fw-semibold">Barras (unidades):</label>
-                        <input type="number" step="1" min="1" name="quantidade" class="form-control"
-                            placeholder="Qtd. inteira" required>
+                        <input type="number" step="1" min="1" name="quantidade" class="form-control" placeholder="Qtd. inteira" required>
                     </div>
                 </div>
 
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Motivo do Ajuste:</label>
-                    <input type="text" name="motivo" class="form-control"
-                        placeholder="Ex: Inventário de contagem física semanal" required>
+                    <input type="text" name="motivo" class="form-control" placeholder="Ex: Inventário de contagem física semanal" required>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i> Gravar Ajuste</button>
+                <button type="submit" class="btn btn-primary fw-semibold">
+                    <i class="bi bi-check2 me-1"></i> Gravar Ajuste
+                </button>
             </div>
         </form>
     </div>
